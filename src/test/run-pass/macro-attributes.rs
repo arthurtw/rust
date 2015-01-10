@@ -10,8 +10,6 @@
 
 // ignore-pretty - token trees can't pretty print
 
-#![feature(macro_rules)]
-
 macro_rules! compiles_fine {
     (#[$at:meta]) => {
         // test that the different types of attributes work
@@ -27,7 +25,7 @@ macro_rules! compiles_fine {
 }
 
 // item
-compiles_fine!(#[foo])
+compiles_fine!(#[foo]);
 
 pub fn main() {
     // statement

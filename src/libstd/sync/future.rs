@@ -8,8 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! A type representing values that may be computed concurrently and operations for working with
-//! them.
+//! A type representing values that may be computed concurrently and operations
+//! for working with them.
 //!
 //! # Example
 //!
@@ -17,19 +17,23 @@
 //! use std::sync::Future;
 //! # fn fib(n: uint) -> uint {42};
 //! # fn make_a_sandwich() {};
-//! let mut delayed_fib = Future::spawn(proc() { fib(5000) });
+//! let mut delayed_fib = Future::spawn(move|| { fib(5000) });
 //! make_a_sandwich();
 //! println!("fib(5000) = {}", delayed_fib.get())
 //! ```
 
 #![allow(missing_docs)]
+#![unstable = "futures as-is have yet to be deeply reevaluated with recent \
+               core changes to Rust's synchronization story, and will likely \
+               become stable in the future but are unstable until that time"]
 
 use core::prelude::*;
 use core::mem::replace;
 
 use self::FutureState::*;
-use comm::{Receiver, channel};
-use task::spawn;
+use sync::mpsc::{Receiver, channel};
+use thunk::{Thunk};
+use thread::Thread;
 
 /// A type encapsulating the result of a computation which may not be complete
 pub struct Future<A> {
@@ -37,7 +41,7 @@ pub struct Future<A> {
 }
 
 enum FutureState<A> {
-    Pending(proc():Send -> A),
+    Pending(Thunk<(),A>),
     Evaluating,
     Forced(A)
 }
@@ -61,10 +65,6 @@ impl<A> Future<A> {
         }
     }
 
-    /// Deprecated, use into_inner() instead
-    #[deprecated = "renamed to into_inner()"]
-    pub fn unwrap(self) -> A { self.into_inner() }
-
     pub fn get_ref<'a>(&'a mut self) -> &'a A {
         /*!
         * Executes the future's closure and then returns a reference
@@ -78,7 +78,7 @@ impl<A> Future<A> {
                 match replace(&mut self.state, Evaluating) {
                     Forced(_) | Evaluating => panic!("Logic error."),
                     Pending(f) => {
-                        self.state = Forced(f());
+                        self.state = Forced(f.invoke(()));
                         self.get_ref()
                     }
                 }
@@ -97,7 +97,9 @@ impl<A> Future<A> {
         Future {state: Forced(val)}
     }
 
-    pub fn from_fn(f: proc():Send -> A) -> Future<A> {
+    pub fn from_fn<F>(f: F) -> Future<A>
+        where F : FnOnce() -> A, F : Send
+    {
         /*!
          * Create a future from a function.
          *
@@ -106,7 +108,7 @@ impl<A> Future<A> {
          * function. It is not spawned into another task.
          */
 
-        Future {state: Pending(f)}
+        Future {state: Pending(Thunk::new(f))}
     }
 }
 
@@ -119,12 +121,14 @@ impl<A:Send> Future<A> {
          * waiting for the result to be received on the port.
          */
 
-        Future::from_fn(proc() {
-            rx.recv()
+        Future::from_fn(move |:| {
+            rx.recv().unwrap()
         })
     }
 
-    pub fn spawn(blk: proc():Send -> A) -> Future<A> {
+    pub fn spawn<F>(blk: F) -> Future<A>
+        where F : FnOnce() -> A, F : Send
+    {
         /*!
          * Create a future from a unique closure.
          *
@@ -134,9 +138,9 @@ impl<A:Send> Future<A> {
 
         let (tx, rx) = channel();
 
-        spawn(proc() {
+        Thread::spawn(move |:| {
             // Don't panic if the other end has hung up
-            let _ = tx.send_opt(blk());
+            let _ = tx.send(blk());
         });
 
         Future::from_receiver(rx)
@@ -145,10 +149,10 @@ impl<A:Send> Future<A> {
 
 #[cfg(test)]
 mod test {
-    use prelude::*;
+    use prelude::v1::*;
+    use sync::mpsc::channel;
     use sync::Future;
-    use task;
-    use comm::channel;
+    use thread::Thread;
 
     #[test]
     fn test_from_value() {
@@ -159,14 +163,14 @@ mod test {
     #[test]
     fn test_from_receiver() {
         let (tx, rx) = channel();
-        tx.send("whale".to_string());
+        tx.send("whale".to_string()).unwrap();
         let mut f = Future::from_receiver(rx);
         assert_eq!(f.get(), "whale");
     }
 
     #[test]
     fn test_from_fn() {
-        let mut f = Future::from_fn(proc() "brail".to_string());
+        let mut f = Future::from_fn(move|| "brail".to_string());
         assert_eq!(f.get(), "brail");
     }
 
@@ -179,7 +183,7 @@ mod test {
     #[test]
     fn test_interface_unwrap() {
         let f = Future::from_value("fail".to_string());
-        assert_eq!(f.unwrap(), "fail");
+        assert_eq!(f.into_inner(), "fail");
     }
 
     #[test]
@@ -190,14 +194,14 @@ mod test {
 
     #[test]
     fn test_spawn() {
-        let mut f = Future::spawn(proc() "bale".to_string());
+        let mut f = Future::spawn(move|| "bale".to_string());
         assert_eq!(f.get(), "bale");
     }
 
     #[test]
     #[should_fail]
     fn test_future_panic() {
-        let mut f = Future::spawn(proc() panic!());
+        let mut f = Future::spawn(move|| panic!());
         let _x: String = f.get();
     }
 
@@ -205,11 +209,11 @@ mod test {
     fn test_sendable_future() {
         let expected = "schlorf";
         let (tx, rx) = channel();
-        let f = Future::spawn(proc() { expected });
-        task::spawn(proc() {
+        let f = Future::spawn(move|| { expected });
+        let _t = Thread::spawn(move|| {
             let mut f = f;
-            tx.send(f.get());
+            tx.send(f.get()).unwrap();
         });
-        assert_eq!(rx.recv(), expected);
+        assert_eq!(rx.recv().unwrap(), expected);
     }
 }

@@ -30,7 +30,7 @@
 //! defined and used like so:
 //!
 //! ```
-//! #[deriving(Show)]
+//! #[derive(Show)]
 //! enum Version { Version1, Version2 }
 //!
 //! fn parse_version(header: &[u8]) -> Result<Version, &'static str> {
@@ -47,10 +47,10 @@
 //! let version = parse_version(&[1, 2, 3, 4]);
 //! match version {
 //!     Ok(v) => {
-//!         println!("working with version: {}", v);
+//!         println!("working with version: {:?}", v);
 //!     }
 //!     Err(e) => {
-//!         println!("error parsing header: {}", e);
+//!         println!("error parsing header: {:?}", e);
 //!     }
 //! }
 //! ```
@@ -220,9 +220,9 @@
 //!
 //! ```
 //! # #![feature(macro_rules)]
-//! macro_rules! try(
+//! macro_rules! try {
 //!     ($e:expr) => (match $e { Ok(e) => e, Err(e) => return Err(e) })
-//! )
+//! }
 //! # fn main() { }
 //! ```
 //!
@@ -230,27 +230,29 @@
 
 #![stable]
 
-use self::Result::*;
+use self::Result::{Ok, Err};
 
-use kinds::Copy;
-use std::fmt::Show;
-use slice;
-use slice::AsSlice;
+use clone::Clone;
+use fmt::Show;
 use iter::{Iterator, IteratorExt, DoubleEndedIterator, FromIterator, ExactSizeIterator};
-use option::Option;
-use option::Option::{None, Some};
+use ops::{FnMut, FnOnce};
+use option::Option::{self, None, Some};
+use slice::AsSlice;
+use slice;
 
 /// `Result` is a type that represents either success (`Ok`) or failure (`Err`).
 ///
 /// See the [`std::result`](index.html) module documentation for details.
-#[deriving(Clone, PartialEq, PartialOrd, Eq, Ord, Show)]
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Show, Hash)]
 #[must_use]
 #[stable]
 pub enum Result<T, E> {
     /// Contains the success value
+    #[stable]
     Ok(T),
 
     /// Contains the error value
+    #[stable]
     Err(E)
 }
 
@@ -258,6 +260,7 @@ pub enum Result<T, E> {
 // Type implementation
 /////////////////////////////////////////////////////////////////////////////
 
+#[stable]
 impl<T, E> Result<T, E> {
     /////////////////////////////////////////////////////////////////////////
     // Querying the contained values
@@ -300,7 +303,6 @@ impl<T, E> Result<T, E> {
         !self.is_ok()
     }
 
-
     /////////////////////////////////////////////////////////////////////////
     // Adapter for each variant
     /////////////////////////////////////////////////////////////////////////
@@ -330,7 +332,7 @@ impl<T, E> Result<T, E> {
 
     /// Convert from `Result<T, E>` to `Option<E>`
     ///
-    /// Converts `self` into an `Option<T>`, consuming `self`,
+    /// Converts `self` into an `Option<E>`, consuming `self`,
     /// and discarding the value, if any.
     ///
     /// # Example
@@ -369,7 +371,7 @@ impl<T, E> Result<T, E> {
     /// ```
     #[inline]
     #[stable]
-    pub fn as_ref<'r>(&'r self) -> Result<&'r T, &'r E> {
+    pub fn as_ref(&self) -> Result<&T, &E> {
         match *self {
             Ok(ref x) => Ok(x),
             Err(ref x) => Err(x),
@@ -381,8 +383,8 @@ impl<T, E> Result<T, E> {
     /// ```
     /// fn mutate(r: &mut Result<int, int>) {
     ///     match r.as_mut() {
-    ///         Ok(&ref mut v) => *v = 42,
-    ///         Err(&ref mut e) => *e = 0,
+    ///         Ok(&mut ref mut v) => *v = 42,
+    ///         Err(&mut ref mut e) => *e = 0,
     ///     }
     /// }
     ///
@@ -395,8 +397,8 @@ impl<T, E> Result<T, E> {
     /// assert_eq!(x.unwrap_err(), 0);
     /// ```
     #[inline]
-    #[unstable = "waiting for mut conventions"]
-    pub fn as_mut<'r>(&'r mut self) -> Result<&'r mut T, &'r mut E> {
+    #[stable]
+    pub fn as_mut(&mut self) -> Result<&mut T, &mut E> {
         match *self {
             Ok(ref mut x) => Ok(x),
             Err(ref mut x) => Err(x),
@@ -420,7 +422,7 @@ impl<T, E> Result<T, E> {
     /// ```
     #[inline]
     #[unstable = "waiting for mut conventions"]
-    pub fn as_mut_slice<'r>(&'r mut self) -> &'r mut [T] {
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
         match *self {
             Ok(ref mut x) => slice::mut_ref_slice(x),
             Err(_) => {
@@ -456,7 +458,7 @@ impl<T, E> Result<T, E> {
     ///     let line: IoResult<String> = buffer.read_line();
     ///     // Convert the string line to a number using `map` and `from_str`
     ///     let val: IoResult<int> = line.map(|line| {
-    ///         from_str::<int>(line.as_slice().trim_right()).unwrap_or(0)
+    ///         line.as_slice().trim_right().parse::<int>().unwrap_or(0)
     ///     });
     ///     // Add the value if there were no errors, otherwise add 0
     ///     sum += val.ok().unwrap_or(0);
@@ -465,11 +467,11 @@ impl<T, E> Result<T, E> {
     /// assert!(sum == 10);
     /// ```
     #[inline]
-    #[unstable = "waiting for unboxed closures"]
-    pub fn map<U>(self, op: |T| -> U) -> Result<U,E> {
+    #[stable]
+    pub fn map<U, F: FnOnce(T) -> U>(self, op: F) -> Result<U,E> {
         match self {
-          Ok(t) => Ok(op(t)),
-          Err(e) => Err(e)
+            Ok(t) => Ok(op(t)),
+            Err(e) => Err(e)
         }
     }
 
@@ -491,14 +493,13 @@ impl<T, E> Result<T, E> {
     /// assert_eq!(x.map_err(stringify), Err("error code: 13".to_string()));
     /// ```
     #[inline]
-    #[unstable = "waiting for unboxed closures"]
-    pub fn map_err<F>(self, op: |E| -> F) -> Result<T,F> {
+    #[stable]
+    pub fn map_err<F, O: FnOnce(E) -> F>(self, op: O) -> Result<T,F> {
         match self {
-          Ok(t) => Ok(t),
-          Err(e) => Err(op(e))
+            Ok(t) => Ok(t),
+            Err(e) => Err(op(e))
         }
     }
-
 
     /////////////////////////////////////////////////////////////////////////
     // Iterator constructors
@@ -516,9 +517,9 @@ impl<T, E> Result<T, E> {
     /// assert_eq!(x.iter().next(), None);
     /// ```
     #[inline]
-    #[unstable = "waiting for iterator conventions"]
-    pub fn iter<'r>(&'r self) -> Item<&'r T> {
-        Item{opt: self.as_ref().ok()}
+    #[stable]
+    pub fn iter(&self) -> Iter<T> {
+        Iter { inner: self.as_ref().ok() }
     }
 
     /// Returns a mutable iterator over the possibly contained value.
@@ -528,7 +529,7 @@ impl<T, E> Result<T, E> {
     /// ```
     /// let mut x: Result<uint, &str> = Ok(7);
     /// match x.iter_mut().next() {
-    ///     Some(&ref mut x) => *x = 40,
+    ///     Some(&mut ref mut x) => *x = 40,
     ///     None => {},
     /// }
     /// assert_eq!(x, Ok(40));
@@ -537,9 +538,9 @@ impl<T, E> Result<T, E> {
     /// assert_eq!(x.iter_mut().next(), None);
     /// ```
     #[inline]
-    #[unstable = "waiting for iterator conventions"]
-    pub fn iter_mut<'r>(&'r mut self) -> Item<&'r mut T> {
-        Item{opt: self.as_mut().ok()}
+    #[stable]
+    pub fn iter_mut(&mut self) -> IterMut<T> {
+        IterMut { inner: self.as_mut().ok() }
     }
 
     /// Returns a consuming iterator over the possibly contained value.
@@ -556,9 +557,9 @@ impl<T, E> Result<T, E> {
     /// assert_eq!(v, vec![]);
     /// ```
     #[inline]
-    #[unstable = "waiting for iterator conventions"]
-    pub fn into_iter(self) -> Item<T> {
-        Item{opt: self.ok()}
+    #[stable]
+    pub fn into_iter(self) -> IntoIter<T> {
+        IntoIter { inner: self.ok() }
     }
 
     ////////////////////////////////////////////////////////////////////////
@@ -611,8 +612,8 @@ impl<T, E> Result<T, E> {
     /// assert_eq!(Err(3).and_then(sq).and_then(sq), Err(3));
     /// ```
     #[inline]
-    #[unstable = "waiting for unboxed closures"]
-    pub fn and_then<U>(self, op: |T| -> Result<U, E>) -> Result<U, E> {
+    #[stable]
+    pub fn and_then<U, F: FnOnce(T) -> Result<U, E>>(self, op: F) -> Result<U, E> {
         match self {
             Ok(t) => op(t),
             Err(e) => Err(e),
@@ -665,8 +666,8 @@ impl<T, E> Result<T, E> {
     /// assert_eq!(Err(3).or_else(err).or_else(err), Err(3));
     /// ```
     #[inline]
-    #[unstable = "waiting for unboxed closures"]
-    pub fn or_else<F>(self, op: |E| -> Result<T, F>) -> Result<T, F> {
+    #[stable]
+    pub fn or_else<F, O: FnOnce(E) -> Result<T, F>>(self, op: O) -> Result<T, F> {
         match self {
             Ok(t) => Ok(t),
             Err(e) => op(e),
@@ -687,7 +688,7 @@ impl<T, E> Result<T, E> {
     /// assert_eq!(x.unwrap_or(optb), optb);
     /// ```
     #[inline]
-    #[unstable = "waiting for conventions"]
+    #[stable]
     pub fn unwrap_or(self, optb: T) -> T {
         match self {
             Ok(t) => t,
@@ -707,8 +708,8 @@ impl<T, E> Result<T, E> {
     /// assert_eq!(Err("foo").unwrap_or_else(count), 3u);
     /// ```
     #[inline]
-    #[unstable = "waiting for conventions"]
-    pub fn unwrap_or_else(self, op: |E| -> T) -> T {
+    #[stable]
+    pub fn unwrap_or_else<F: FnOnce(E) -> T>(self, op: F) -> T {
         match self {
             Ok(t) => t,
             Err(e) => op(e)
@@ -716,6 +717,7 @@ impl<T, E> Result<T, E> {
     }
 }
 
+#[stable]
 impl<T, E: Show> Result<T, E> {
     /// Unwraps a result, yielding the content of an `Ok`.
     ///
@@ -736,16 +738,17 @@ impl<T, E: Show> Result<T, E> {
     /// x.unwrap(); // panics with `emergency failure`
     /// ```
     #[inline]
-    #[unstable = "waiting for conventions"]
+    #[stable]
     pub fn unwrap(self) -> T {
         match self {
             Ok(t) => t,
             Err(e) =>
-                panic!("called `Result::unwrap()` on an `Err` value: {}", e)
+                panic!("called `Result::unwrap()` on an `Err` value: {:?}", e)
         }
     }
 }
 
+#[stable]
 impl<T: Show, E> Result<T, E> {
     /// Unwraps a result, yielding the content of an `Err`.
     ///
@@ -766,11 +769,11 @@ impl<T: Show, E> Result<T, E> {
     /// assert_eq!(x.unwrap_err(), "emergency failure");
     /// ```
     #[inline]
-    #[unstable = "waiting for conventions"]
+    #[stable]
     pub fn unwrap_err(self) -> E {
         match self {
             Ok(t) =>
-                panic!("called `Result::unwrap_err()` on an `Ok` value: {}", t),
+                panic!("called `Result::unwrap_err()` on an `Ok` value: {:?}", t),
             Err(e) => e
         }
     }
@@ -797,42 +800,90 @@ impl<T, E> AsSlice<T> for Result<T, E> {
 }
 
 /////////////////////////////////////////////////////////////////////////////
-// The Result Iterator
+// The Result Iterators
 /////////////////////////////////////////////////////////////////////////////
 
-/// A `Result` iterator that yields either one or zero elements
-///
-/// The `Item` iterator is returned by the `iter`, `iter_mut` and `into_iter`
-/// methods on `Result`.
-#[deriving(Clone)]
-#[unstable = "waiting for iterator conventions"]
-pub struct Item<T> {
-    opt: Option<T>
-}
+/// An iterator over a reference to the `Ok` variant of a `Result`.
+#[stable]
+pub struct Iter<'a, T: 'a> { inner: Option<&'a T> }
 
-impl<T> Iterator<T> for Item<T> {
+#[stable]
+impl<'a, T> Iterator for Iter<'a, T> {
+    type Item = &'a T;
+
     #[inline]
-    fn next(&mut self) -> Option<T> {
-        self.opt.take()
-    }
-
+    fn next(&mut self) -> Option<&'a T> { self.inner.take() }
     #[inline]
     fn size_hint(&self) -> (uint, Option<uint>) {
-        match self.opt {
-            Some(_) => (1, Some(1)),
-            None => (0, Some(0)),
-        }
+        let n = if self.inner.is_some() {1} else {0};
+        (n, Some(n))
     }
 }
 
-impl<A> DoubleEndedIterator<A> for Item<A> {
+#[stable]
+impl<'a, T> DoubleEndedIterator for Iter<'a, T> {
     #[inline]
-    fn next_back(&mut self) -> Option<A> {
-        self.opt.take()
+    fn next_back(&mut self) -> Option<&'a T> { self.inner.take() }
+}
+
+#[stable]
+impl<'a, T> ExactSizeIterator for Iter<'a, T> {}
+
+impl<'a, T> Clone for Iter<'a, T> {
+    fn clone(&self) -> Iter<'a, T> { Iter { inner: self.inner } }
+}
+
+/// An iterator over a mutable reference to the `Ok` variant of a `Result`.
+#[stable]
+pub struct IterMut<'a, T: 'a> { inner: Option<&'a mut T> }
+
+#[stable]
+impl<'a, T> Iterator for IterMut<'a, T> {
+    type Item = &'a mut T;
+
+    #[inline]
+    fn next(&mut self) -> Option<&'a mut T> { self.inner.take() }
+    #[inline]
+    fn size_hint(&self) -> (uint, Option<uint>) {
+        let n = if self.inner.is_some() {1} else {0};
+        (n, Some(n))
     }
 }
 
-impl<A> ExactSizeIterator<A> for Item<A> {}
+#[stable]
+impl<'a, T> DoubleEndedIterator for IterMut<'a, T> {
+    #[inline]
+    fn next_back(&mut self) -> Option<&'a mut T> { self.inner.take() }
+}
+
+#[stable]
+impl<'a, T> ExactSizeIterator for IterMut<'a, T> {}
+
+/// An iterator over the value in a `Ok` variant of a `Result`.
+#[stable]
+pub struct IntoIter<T> { inner: Option<T> }
+
+#[stable]
+impl<T> Iterator for IntoIter<T> {
+    type Item = T;
+
+    #[inline]
+    fn next(&mut self) -> Option<T> { self.inner.take() }
+    #[inline]
+    fn size_hint(&self) -> (uint, Option<uint>) {
+        let n = if self.inner.is_some() {1} else {0};
+        (n, Some(n))
+    }
+}
+
+#[stable]
+impl<T> DoubleEndedIterator for IntoIter<T> {
+    #[inline]
+    fn next_back(&mut self) -> Option<T> { self.inner.take() }
+}
+
+#[stable]
+impl<T> ExactSizeIterator for IntoIter<T> {}
 
 /////////////////////////////////////////////////////////////////////////////
 // FromIterator
@@ -858,7 +909,7 @@ impl<A, E, V: FromIterator<A>> FromIterator<Result<A, E>> for Result<V, E> {
     /// assert!(res == Ok(vec!(2u, 3u)));
     /// ```
     #[inline]
-    fn from_iter<I: Iterator<Result<A, E>>>(iter: I) -> Result<V, E> {
+    fn from_iter<I: Iterator<Item=Result<A, E>>>(iter: I) -> Result<V, E> {
         // FIXME(#11084): This could be replaced with Iterator::scan when this
         // performance bug is closed.
 
@@ -867,7 +918,9 @@ impl<A, E, V: FromIterator<A>> FromIterator<Result<A, E>> for Result<V, E> {
             err: Option<E>,
         }
 
-        impl<T, E, Iter: Iterator<Result<T, E>>> Iterator<T> for Adapter<Iter, E> {
+        impl<T, E, Iter: Iterator<Item=Result<T, E>>> Iterator for Adapter<Iter, E> {
+            type Item = T;
+
             #[inline]
             fn next(&mut self) -> Option<T> {
                 match self.iter.next() {
@@ -900,14 +953,15 @@ impl<A, E, V: FromIterator<A>> FromIterator<Result<A, E>> for Result<V, E> {
 /// If an `Err` is encountered, it is immediately returned.
 /// Otherwise, the folded value is returned.
 #[inline]
-#[experimental]
+#[unstable]
 pub fn fold<T,
             V,
             E,
-            Iter: Iterator<Result<T, E>>>(
+            F: FnMut(V, T) -> V,
+            Iter: Iterator<Item=Result<T, E>>>(
             mut iterator: Iter,
             mut init: V,
-            f: |V, T| -> V)
+            mut f: F)
             -> Result<V, E> {
     for t in iterator {
         match t {
@@ -917,7 +971,3 @@ pub fn fold<T,
     }
     Ok(init)
 }
-
-#[cfg(not(stage0))]
-impl<T:Copy,U:Copy> Copy for Result<T,U> {}
-

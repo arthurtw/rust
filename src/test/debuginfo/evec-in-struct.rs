@@ -51,30 +51,31 @@
 // lldb-check:[...]$4 = StructPaddedAtEnd { x: [22, 23], y: [24, 25] }
 
 #![allow(unused_variables)]
+#![omit_gdb_pretty_printer_section]
 
 struct NoPadding1 {
-    x: [u32, ..3],
+    x: [u32; 3],
     y: i32,
-    z: [f32, ..2]
+    z: [f32; 2]
 }
 
 struct NoPadding2 {
-    x: [u32, ..3],
-    y: [[u32, ..2], ..2]
+    x: [u32; 3],
+    y: [[u32; 2]; 2]
 }
 
 struct StructInternalPadding {
-    x: [i16, ..2],
-    y: [i64, ..2]
+    x: [i16; 2],
+    y: [i64; 2]
 }
 
 struct SingleVec {
-    x: [i16, ..5]
+    x: [i16; 5]
 }
 
 struct StructPaddedAtEnd {
-    x: [i64, ..2],
-    y: [i16, ..2]
+    x: [i64; 2],
+    y: [i16; 2]
 }
 
 fn main() {

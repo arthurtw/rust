@@ -11,11 +11,11 @@
 // ignore-stage1
 // ignore-android
 // aux-build:issue_16723_multiple_items_syntax_ext.rs
-#![feature(phase)]
+#![feature(plugin)]
 
-#[phase(plugin)] extern crate issue_16723_multiple_items_syntax_ext;
+#[plugin] #[no_link] extern crate issue_16723_multiple_items_syntax_ext;
 
-multiple_items!()
+multiple_items!();
 
 impl Struct1 {
     fn foo() {}

@@ -16,11 +16,10 @@
 //! typically limited to a few patterns.
 //!
 //! Use the [`null` function](fn.null.html) to create null pointers,
-//! the [`is_null`](trait.RawPtr.html#tymethod.is_null)
-//! and [`is_not_null`](trait.RawPtr.html#method.is_not_null)
-//! methods of the [`RawPtr` trait](trait.RawPtr.html) to check for null.
-//! The `RawPtr` trait is imported by the prelude, so `is_null` etc.
-//! work everywhere. The `RawPtr` also defines the `offset` method,
+//! the [`is_null`](trait.PtrExt.html#tymethod.is_null)
+//! methods of the [`PtrExt` trait](trait.PtrExt.html) to check for null.
+//! The `PtrExt` trait is imported by the prelude, so `is_null` etc.
+//! work everywhere. The `PtrExt` also defines the `offset` method,
 //! for pointer math.
 //!
 //! # Common ways to create unsafe pointers
@@ -47,12 +46,13 @@
 //! though unsafely, transformed from one type to the other.
 //!
 //! ```
+//! # use std::boxed::Box;
 //! use std::mem;
 //!
 //! unsafe {
-//!     let my_num: Box<int> = box 10;
+//!     let my_num: Box<int> = Box::new(10);
 //!     let my_num: *const int = mem::transmute(my_num);
-//!     let my_speed: Box<int> = box 88;
+//!     let my_speed: Box<int> = Box::new(88);
 //!     let my_speed: *mut int = mem::transmute(my_speed);
 //!
 //!     // By taking ownership of the original `Box<T>` though
@@ -87,23 +87,32 @@
 //! but C APIs hand out a lot of pointers generally, so are a common source
 //! of unsafe pointers in Rust.
 
+#![stable]
+
 use mem;
 use clone::Clone;
 use intrinsics;
-use option::Option;
-use option::Option::{Some, None};
+use option::Option::{self, Some, None};
+use marker::{Send, Sized, Sync};
 
-use cmp::{PartialEq, Eq, PartialOrd, Equiv};
-use cmp::Ordering;
-use cmp::Ordering::{Less, Equal, Greater};
+use cmp::{PartialEq, Eq, Ord, PartialOrd};
+use cmp::Ordering::{self, Less, Equal, Greater};
 
-pub use intrinsics::copy_memory;
+// FIXME #19649: intrinsic docs don't render, so these have no docs :(
+
+#[unstable]
 pub use intrinsics::copy_nonoverlapping_memory;
+
+#[unstable]
+pub use intrinsics::copy_memory;
+
+#[unstable = "uncertain about naming and semantics"]
 pub use intrinsics::set_memory;
 
-/// Create a null pointer.
+
+/// Creates a null raw pointer.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```
 /// use std::ptr;
@@ -112,12 +121,12 @@ pub use intrinsics::set_memory;
 /// assert!(p.is_null());
 /// ```
 #[inline]
-#[unstable = "may need a different name after pending changes to pointer types"]
+#[stable]
 pub fn null<T>() -> *const T { 0 as *const T }
 
-/// Create an unsafe mutable null pointer.
+/// Creates a null mutable raw pointer.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```
 /// use std::ptr;
@@ -126,21 +135,31 @@ pub fn null<T>() -> *const T { 0 as *const T }
 /// assert!(p.is_null());
 /// ```
 #[inline]
-#[unstable = "may need a different name after pending changes to pointer types"]
+#[stable]
 pub fn null_mut<T>() -> *mut T { 0 as *mut T }
 
-/// Zeroes out `count * size_of::<T>` bytes of memory at `dst`
+/// Zeroes out `count * size_of::<T>` bytes of memory at `dst`. `count` may be
+/// `0`.
+///
+/// # Safety
+///
+/// Beyond accepting a raw pointer, this is unsafe because it will not drop the
+/// contents of `dst`, and may be used to create invalid instances of `T`.
 #[inline]
-#[experimental = "uncertain about naming and semantics"]
-#[allow(experimental)]
+#[unstable = "may play a larger role in std::ptr future extensions"]
 pub unsafe fn zero_memory<T>(dst: *mut T, count: uint) {
     set_memory(dst, 0, count);
 }
 
-/// Swap the values at two mutable locations of the same type, without
-/// deinitialising either. They may overlap.
+/// Swaps the values at two mutable locations of the same type, without
+/// deinitialising either. They may overlap, unlike `mem::swap` which is
+/// otherwise equivalent.
+///
+/// # Safety
+///
+/// This is only unsafe because it accepts a raw pointer.
 #[inline]
-#[unstable]
+#[stable]
 pub unsafe fn swap<T>(x: *mut T, y: *mut T) {
     // Give ourselves some scratch space to work with
     let mut tmp: T = mem::uninitialized();
@@ -156,29 +175,46 @@ pub unsafe fn swap<T>(x: *mut T, y: *mut T) {
     mem::forget(tmp);
 }
 
-/// Replace the value at a mutable location with a new one, returning the old
-/// value, without deinitialising either.
+/// Replaces the value at `dest` with `src`, returning the old
+/// value, without dropping either.
+///
+/// # Safety
+///
+/// This is only unsafe because it accepts a raw pointer.
+/// Otherwise, this operation is identical to `mem::replace`.
 #[inline]
-#[unstable]
+#[stable]
 pub unsafe fn replace<T>(dest: *mut T, mut src: T) -> T {
     mem::swap(mem::transmute(dest), &mut src); // cannot overlap
     src
 }
 
-/// Reads the value from `*src` and returns it.
+/// Reads the value from `src` without dropping it. This leaves the
+/// memory in `src` unchanged.
+///
+/// # Safety
+///
+/// Beyond accepting a raw pointer, this is unsafe because it semantically
+/// moves the value out of `src` without preventing further usage of `src`.
+/// If `T` is not `Copy`, then care must be taken to ensure that the value at
+/// `src` is not used before the data is overwritten again (e.g. with `write`,
+/// `zero_memory`, or `copy_memory`). Note that `*src = foo` counts as a use
+/// because it will attempt to drop the value previously at `*src`.
 #[inline(always)]
-#[unstable]
+#[stable]
 pub unsafe fn read<T>(src: *const T) -> T {
     let mut tmp: T = mem::uninitialized();
     copy_nonoverlapping_memory(&mut tmp, src, 1);
     tmp
 }
 
-/// Reads the value from `*src` and nulls it out.
-/// This currently prevents destructors from executing.
+/// Reads the value from `src` and nulls it out without dropping it.
+///
+/// # Safety
+///
+/// This is unsafe for the same reasons that `read` is unsafe.
 #[inline(always)]
-#[experimental]
-#[allow(experimental)]
+#[unstable = "may play a larger role in std::ptr future extensions"]
 pub unsafe fn read_and_zero<T>(dest: *mut T) -> T {
     // Copy the data out from `dest`:
     let tmp = read(&*dest);
@@ -189,72 +225,91 @@ pub unsafe fn read_and_zero<T>(dest: *mut T) -> T {
     tmp
 }
 
-/// Unsafely overwrite a memory location with the given value without destroying
-/// the old value.
+/// Overwrites a memory location with the given value without reading or
+/// dropping the old value.
 ///
-/// This operation is unsafe because it does not destroy the previous value
-/// contained at the location `dst`. This could leak allocations or resources,
-/// so care must be taken to previously deallocate the value at `dst`.
+/// # Safety
+///
+/// Beyond accepting a raw pointer, this operation is unsafe because it does
+/// not drop the contents of `dst`. This could leak allocations or resources,
+/// so care must be taken not to overwrite an object that should be dropped.
+///
+/// This is appropriate for initializing uninitialized memory, or overwriting
+/// memory that has previously been `read` from.
 #[inline]
-#[unstable]
+#[stable]
 pub unsafe fn write<T>(dst: *mut T, src: T) {
     intrinsics::move_val_init(&mut *dst, src)
 }
 
 /// Methods on raw pointers
-pub trait RawPtr<T> {
-    /// Returns the null pointer.
-    fn null() -> Self;
+#[stable]
+pub trait PtrExt: Sized {
+    type Target;
 
-    /// Returns true if the pointer is equal to the null pointer.
-    fn is_null(&self) -> bool;
+    /// Returns true if the pointer is null.
+    #[stable]
+    fn is_null(self) -> bool;
 
-    /// Returns true if the pointer is not equal to the null pointer.
-    fn is_not_null(&self) -> bool { !self.is_null() }
-
-    /// Returns the value of this pointer (ie, the address it points to)
-    fn to_uint(&self) -> uint;
-
-    /// Returns `None` if the pointer is null, or else returns a reference to the
-    /// value wrapped in `Some`.
+    /// Returns `None` if the pointer is null, or else returns a reference to
+    /// the value wrapped in `Some`.
     ///
-    /// # Safety Notes
+    /// # Safety
     ///
-    /// While this method and its mutable counterpart are useful for null-safety,
-    /// it is important to note that this is still an unsafe operation because
-    /// the returned value could be pointing to invalid memory.
-    unsafe fn as_ref<'a>(&self) -> Option<&'a T>;
+    /// While this method and its mutable counterpart are useful for
+    /// null-safety, it is important to note that this is still an unsafe
+    /// operation because the returned value could be pointing to invalid
+    /// memory.
+    #[unstable = "Option is not clearly the right return type, and we may want \
+                  to tie the return lifetime to a borrow of the raw pointer"]
+    unsafe fn as_ref<'a>(&self) -> Option<&'a Self::Target>;
 
-    /// Calculates the offset from a pointer. The offset *must* be in-bounds of
-    /// the object, or one-byte-past-the-end.  `count` is in units of T; e.g. a
+    /// Calculates the offset from a pointer. `count` is in units of T; e.g. a
     /// `count` of 3 represents a pointer offset of `3 * sizeof::<T>()` bytes.
+    ///
+    /// # Safety
+    ///
+    /// The offset must be in-bounds of the object, or one-byte-past-the-end.
+    /// Otherwise `offset` invokes Undefined Behaviour, regardless of whether
+    /// the pointer is used.
+    #[stable]
     unsafe fn offset(self, count: int) -> Self;
 }
 
 /// Methods on mutable raw pointers
-pub trait RawMutPtr<T>{
-    /// Returns `None` if the pointer is null, or else returns a mutable reference
-    /// to the value wrapped in `Some`. As with `as_ref`, this is unsafe because
-    /// it cannot verify the validity of the returned pointer.
-    unsafe fn as_mut<'a>(&self) -> Option<&'a mut T>;
+#[stable]
+pub trait MutPtrExt {
+    type Target;
+
+    /// Returns `None` if the pointer is null, or else returns a mutable
+    /// reference to the value wrapped in `Some`.
+    ///
+    /// # Safety
+    ///
+    /// As with `as_ref`, this is unsafe because it cannot verify the validity
+    /// of the returned pointer.
+    #[unstable = "Option is not clearly the right return type, and we may want \
+                  to tie the return lifetime to a borrow of the raw pointer"]
+    unsafe fn as_mut<'a>(&self) -> Option<&'a mut Self::Target>;
 }
 
-impl<T> RawPtr<T> for *const T {
-    #[inline]
-    fn null() -> *const T { null() }
+#[stable]
+impl<T> PtrExt for *const T {
+    type Target = T;
 
     #[inline]
-    fn is_null(&self) -> bool { *self == RawPtr::null() }
+    #[stable]
+    fn is_null(self) -> bool { self as uint == 0 }
 
     #[inline]
-    fn to_uint(&self) -> uint { *self as uint }
-
-    #[inline]
+    #[stable]
     unsafe fn offset(self, count: int) -> *const T {
         intrinsics::offset(self, count)
     }
 
     #[inline]
+    #[unstable = "return value does not necessarily convey all possible \
+                  information"]
     unsafe fn as_ref<'a>(&self) -> Option<&'a T> {
         if self.is_null() {
             None
@@ -264,22 +319,23 @@ impl<T> RawPtr<T> for *const T {
     }
 }
 
-impl<T> RawPtr<T> for *mut T {
-    #[inline]
-    fn null() -> *mut T { null_mut() }
+#[stable]
+impl<T> PtrExt for *mut T {
+    type Target = T;
 
     #[inline]
-    fn is_null(&self) -> bool { *self == RawPtr::null() }
+    #[stable]
+    fn is_null(self) -> bool { self as uint == 0 }
 
     #[inline]
-    fn to_uint(&self) -> uint { *self as uint }
-
-    #[inline]
+    #[stable]
     unsafe fn offset(self, count: int) -> *mut T {
         intrinsics::offset(self as *const T, count) as *mut T
     }
 
     #[inline]
+    #[unstable = "return value does not necessarily convey all possible \
+                  information"]
     unsafe fn as_ref<'a>(&self) -> Option<&'a T> {
         if self.is_null() {
             None
@@ -289,8 +345,13 @@ impl<T> RawPtr<T> for *mut T {
     }
 }
 
-impl<T> RawMutPtr<T> for *mut T {
+#[stable]
+impl<T> MutPtrExt for *mut T {
+    type Target = T;
+
     #[inline]
+    #[unstable = "return value does not necessarily convey all possible \
+                  information"]
     unsafe fn as_mut<'a>(&self) -> Option<&'a mut T> {
         if self.is_null() {
             None
@@ -301,6 +362,7 @@ impl<T> RawMutPtr<T> for *mut T {
 }
 
 // Equality for pointers
+#[stable]
 impl<T> PartialEq for *const T {
     #[inline]
     fn eq(&self, other: &*const T) -> bool {
@@ -310,8 +372,10 @@ impl<T> PartialEq for *const T {
     fn ne(&self, other: &*const T) -> bool { !self.eq(other) }
 }
 
+#[stable]
 impl<T> Eq for *const T {}
 
+#[stable]
 impl<T> PartialEq for *mut T {
     #[inline]
     fn eq(&self, other: &*mut T) -> bool {
@@ -321,25 +385,10 @@ impl<T> PartialEq for *mut T {
     fn ne(&self, other: &*mut T) -> bool { !self.eq(other) }
 }
 
+#[stable]
 impl<T> Eq for *mut T {}
 
-// Equivalence for pointers
-#[allow(deprecated)]
-#[deprecated = "Use overloaded `core::cmp::PartialEq`"]
-impl<T> Equiv<*mut T> for *const T {
-    fn equiv(&self, other: &*mut T) -> bool {
-        self.to_uint() == other.to_uint()
-    }
-}
-
-#[allow(deprecated)]
-#[deprecated = "Use overloaded `core::cmp::PartialEq`"]
-impl<T> Equiv<*const T> for *mut T {
-    fn equiv(&self, other: &*const T) -> bool {
-        self.to_uint() == other.to_uint()
-    }
-}
-
+#[stable]
 impl<T> Clone for *const T {
     #[inline]
     fn clone(&self) -> *const T {
@@ -347,6 +396,7 @@ impl<T> Clone for *const T {
     }
 }
 
+#[stable]
 impl<T> Clone for *mut T {
     #[inline]
     fn clone(&self) -> *mut T {
@@ -359,6 +409,7 @@ mod externfnpointers {
     use mem;
     use cmp::PartialEq;
 
+    #[stable]
     impl<_R> PartialEq for extern "C" fn() -> _R {
         #[inline]
         fn eq(&self, other: &extern "C" fn() -> _R) -> bool {
@@ -367,8 +418,9 @@ mod externfnpointers {
             self_ == other_
         }
     }
-    macro_rules! fnptreq(
+    macro_rules! fnptreq {
         ($($p:ident),*) => {
+            #[stable]
             impl<_R,$($p),*> PartialEq for extern "C" fn($($p),*) -> _R {
                 #[inline]
                 fn eq(&self, other: &extern "C" fn($($p),*) -> _R) -> bool {
@@ -379,25 +431,34 @@ mod externfnpointers {
                 }
             }
         }
-    )
-    fnptreq!(A)
-    fnptreq!(A,B)
-    fnptreq!(A,B,C)
-    fnptreq!(A,B,C,D)
-    fnptreq!(A,B,C,D,E)
+    }
+    fnptreq! { A }
+    fnptreq! { A,B }
+    fnptreq! { A,B,C }
+    fnptreq! { A,B,C,D }
+    fnptreq! { A,B,C,D,E }
 }
 
 // Comparison for pointers
+#[stable]
+impl<T> Ord for *const T {
+    #[inline]
+    fn cmp(&self, other: &*const T) -> Ordering {
+        if self < other {
+            Less
+        } else if self == other {
+            Equal
+        } else {
+            Greater
+        }
+    }
+}
+
+#[stable]
 impl<T> PartialOrd for *const T {
     #[inline]
     fn partial_cmp(&self, other: &*const T) -> Option<Ordering> {
-        if self < other {
-            Some(Less)
-        } else if self == other {
-            Some(Equal)
-        } else {
-            Some(Greater)
-        }
+        Some(self.cmp(other))
     }
 
     #[inline]
@@ -413,16 +474,25 @@ impl<T> PartialOrd for *const T {
     fn ge(&self, other: &*const T) -> bool { *self >= *other }
 }
 
+#[stable]
+impl<T> Ord for *mut T {
+    #[inline]
+    fn cmp(&self, other: &*mut T) -> Ordering {
+        if self < other {
+            Less
+        } else if self == other {
+            Equal
+        } else {
+            Greater
+        }
+    }
+}
+
+#[stable]
 impl<T> PartialOrd for *mut T {
     #[inline]
     fn partial_cmp(&self, other: &*mut T) -> Option<Ordering> {
-        if self < other {
-            Some(Less)
-        } else if self == other {
-            Some(Equal)
-        } else {
-            Some(Greater)
-        }
+        Some(self.cmp(other))
     }
 
     #[inline]
@@ -438,3 +508,39 @@ impl<T> PartialOrd for *mut T {
     fn ge(&self, other: &*mut T) -> bool { *self >= *other }
 }
 
+/// A wrapper around a raw `*mut T` that indicates that the possessor
+/// of this wrapper owns the referent. This in turn implies that the
+/// `Unique<T>` is `Send`/`Sync` if `T` is `Send`/`Sync`, unlike a
+/// raw `*mut T` (which conveys no particular ownership semantics).
+/// Useful for building abstractions like `Vec<T>` or `Box<T>`, which
+/// internally use raw pointers to manage the memory that they own.
+#[unstable = "recently added to this module"]
+pub struct Unique<T>(pub *mut T);
+
+/// `Unique` pointers are `Send` if `T` is `Send` because the data they
+/// reference is unaliased. Note that this aliasing invariant is
+/// unenforced by the type system; the abstraction using the
+/// `Unique` must enforce it.
+#[unstable = "recently added to this module"]
+unsafe impl<T:Send> Send for Unique<T> { }
+
+/// `Unique` pointers are `Sync` if `T` is `Sync` because the data they
+/// reference is unaliased. Note that this aliasing invariant is
+/// unenforced by the type system; the abstraction using the
+/// `Unique` must enforce it.
+#[unstable = "recently added to this module"]
+unsafe impl<T:Sync> Sync for Unique<T> { }
+
+impl<T> Unique<T> {
+    /// Returns a null Unique.
+    #[unstable = "recently added to this module"]
+    pub fn null() -> Unique<T> {
+        Unique(null_mut())
+    }
+
+    /// Return an (unsafe) pointer into the memory owned by `self`.
+    #[unstable = "recently added to this module"]
+    pub unsafe fn offset(self, offset: int) -> *mut T {
+        self.0.offset(offset)
+    }
+}

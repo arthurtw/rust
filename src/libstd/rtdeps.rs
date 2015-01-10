@@ -12,7 +12,7 @@
 //! the standard library This varies per-platform, but these libraries are
 //! necessary for running libstd.
 
-#![experimental]
+#![unstable]
 
 // All platforms need to link to rustrt
 #[cfg(not(test))]
@@ -22,7 +22,7 @@ extern {}
 // LLVM implements the `frem` instruction as a call to `fmod`, which lives in
 // libm. Hence, we must explicitly link to it.
 //
-// On Linux, librt and libdl are indirect dependencies via rustrt,
+// On Linux, librt and libdl are indirect dependencies via std,
 // and binutils 2.22+ won't add them automatically
 #[cfg(target_os = "linux")]
 #[link(name = "dl")]

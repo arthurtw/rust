@@ -8,13 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-static FOO: uint = FOO; //~ ERROR recursive constant
+static FOO: usize = FOO; //~ ERROR recursive constant
 
 fn main() {
-    let _x: [u8, ..FOO]; // caused stack overflow prior to fix
-    let _y: uint = 1 + {
-        static BAR: uint = BAR; //~ ERROR recursive constant
-        let _z: [u8, ..BAR]; // caused stack overflow prior to fix
+    let _x: [u8; FOO]; // caused stack overflow prior to fix
+    let _y: usize = 1 + {
+        static BAR: usize = BAR; //~ ERROR recursive constant
+        let _z: [u8; BAR]; // caused stack overflow prior to fix
         1
     };
 }

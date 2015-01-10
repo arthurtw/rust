@@ -56,12 +56,10 @@
 
 #![allow(non_camel_case_types)]
 
-use prelude::*;
+use prelude::v1::*;
 
-use kinds::marker;
-use rustrt::exclusive::Exclusive;
-use sync::atomic::{mod, AtomicUint};
-use sync::{Once, ONCE_INIT};
+use sync::atomic::{self, AtomicUint, Ordering};
+use sync::{Mutex, Once, ONCE_INIT};
 
 use sys::thread_local as imp;
 
@@ -100,7 +98,6 @@ pub struct StaticKey {
 /// Inner contents of `StaticKey`, created by the `INIT_INNER` constant.
 pub struct StaticKeyInner {
     key: AtomicUint,
-    nc: marker::NoCopy,
 }
 
 /// A type for a safely managed OS-based TLS slot.
@@ -140,12 +137,11 @@ pub const INIT: StaticKey = StaticKey {
 ///
 /// This value allows specific configuration of the destructor for a TLS key.
 pub const INIT_INNER: StaticKeyInner = StaticKeyInner {
-    key: atomic::INIT_ATOMIC_UINT,
-    nc: marker::NoCopy,
+    key: atomic::ATOMIC_UINT_INIT,
 };
 
 static INIT_KEYS: Once = ONCE_INIT;
-static mut KEYS: *mut Exclusive<Vec<imp::Key>> = 0 as *mut _;
+static mut KEYS: *mut Mutex<Vec<imp::Key>> = 0 as *mut _;
 
 impl StaticKey {
     /// Gets the value associated with this TLS key
@@ -170,7 +166,7 @@ impl StaticKey {
     /// Note that this does *not* run the user-provided destructor if one was
     /// specified at definition time. Doing so must be done manually.
     pub unsafe fn destroy(&self) {
-        match self.inner.key.swap(0, atomic::SeqCst) {
+        match self.inner.key.swap(0, Ordering::SeqCst) {
             0 => {}
             n => { imp::destroy(n as imp::Key) }
         }
@@ -178,7 +174,7 @@ impl StaticKey {
 
     #[inline]
     unsafe fn key(&self) -> imp::Key {
-        match self.inner.key.load(atomic::Relaxed) {
+        match self.inner.key.load(Ordering::Relaxed) {
             0 => self.lazy_init() as imp::Key,
             n => n as imp::Key
         }
@@ -203,7 +199,7 @@ impl StaticKey {
             key2
         };
         assert!(key != 0);
-        match self.inner.key.compare_and_swap(0, key as uint, atomic::SeqCst) {
+        match self.inner.key.compare_and_swap(0, key as uint, Ordering::SeqCst) {
             // The CAS succeeded, so we've created the actual key
             0 => key as uint,
             // If someone beat us to the punch, use their key instead
@@ -250,7 +246,7 @@ impl Drop for Key {
 
 #[cfg(test)]
 mod tests {
-    use prelude::*;
+    use prelude::v1::*;
     use super::{Key, StaticKey, INIT_INNER};
 
     fn assert_sync<T: Sync>() {}
@@ -286,4 +282,3 @@ mod tests {
         }
     }
 }
-

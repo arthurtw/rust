@@ -73,7 +73,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                                               None);
         // attach the crate's exported macros to the top-level module:
         self.module.macros = krate.exported_macros.iter()
-            .map(|it| self.visit_macro(&**it)).collect();
+            .map(|def| self.visit_macro(def)).collect();
         self.module.is_crate = true;
     }
 
@@ -121,7 +121,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
 
     pub fn visit_fn(&mut self, item: &ast::Item,
                     name: ast::Ident, fd: &ast::FnDecl,
-                    fn_style: &ast::FnStyle, _abi: &abi::Abi,
+                    unsafety: &ast::Unsafety, _abi: &abi::Abi,
                     gen: &ast::Generics) -> Function {
         debug!("Visiting fn");
         Function {
@@ -133,7 +133,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
             name: name,
             whence: item.span,
             generics: gen.clone(),
-            fn_style: *fn_style,
+            unsafety: *unsafety,
         }
     }
 
@@ -265,7 +265,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
 
     pub fn visit_item(&mut self, item: &ast::Item,
                       renamed: Option<ast::Ident>, om: &mut Module) {
-        debug!("Visiting item {}", item);
+        debug!("Visiting item {:?}", item);
         let name = renamed.unwrap_or(item.ident);
         match item.node {
             ast::ItemMod(ref m) => {
@@ -322,8 +322,9 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                 };
                 om.constants.push(s);
             },
-            ast::ItemTrait(ref gen, ref def_ub, ref b, ref items) => {
+            ast::ItemTrait(unsafety, ref gen, ref b, ref items) => {
                 let t = Trait {
+                    unsafety: unsafety,
                     name: name,
                     items: items.clone(),
                     generics: gen.clone(),
@@ -333,12 +334,13 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                     whence: item.span,
                     vis: item.vis,
                     stab: self.stability(item.id),
-                    default_unbound: def_ub.clone()
                 };
                 om.traits.push(t);
             },
-            ast::ItemImpl(ref gen, ref tr, ref ty, ref items) => {
+            ast::ItemImpl(unsafety, polarity, ref gen, ref tr, ref ty, ref items) => {
                 let i = Impl {
+                    unsafety: unsafety,
+                    polarity: polarity,
                     generics: gen.clone(),
                     trait_: tr.clone(),
                     for_: ty.clone(),
@@ -361,13 +363,13 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
     }
 
     // convert each exported_macro into a doc item
-    fn visit_macro(&self, item: &ast::Item) -> Macro {
+    fn visit_macro(&self, def: &ast::MacroDef) -> Macro {
         Macro {
-            id: item.id,
-            attrs: item.attrs.clone(),
-            name: item.ident,
-            whence: item.span,
-            stab: self.stability(item.id),
+            id: def.id,
+            attrs: def.attrs.clone(),
+            name: def.ident,
+            whence: def.span,
+            stab: self.stability(def.id),
         }
     }
 }

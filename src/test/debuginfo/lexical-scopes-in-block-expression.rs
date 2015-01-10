@@ -349,6 +349,7 @@
 
 #![allow(unused_variables)]
 #![allow(unused_assignments)]
+#![omit_gdb_pretty_printer_section]
 
 static mut MUT_INT: int = 0;
 
@@ -450,7 +451,7 @@ fn main() {
         sentinel();
 
         val
-    }, ..10];
+    }; 10];
 
     zzz(); // #break
     sentinel();
@@ -491,7 +492,7 @@ fn main() {
     sentinel();
 
     // index expression
-    let a_vector = [10i, ..20];
+    let a_vector = [10i; 20];
     let _ = a_vector[{
         zzz(); // #break
         sentinel();

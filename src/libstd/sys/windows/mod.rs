@@ -18,23 +18,25 @@
 
 extern crate libc;
 
+use prelude::v1::*;
+
 use num;
 use mem;
-use prelude::*;
-use io::{mod, IoResult, IoError};
+use io::{self, IoResult, IoError};
 use sync::{Once, ONCE_INIT};
 
-macro_rules! helper_init( (static $name:ident: Helper<$m:ty>) => (
+macro_rules! helper_init { (static $name:ident: Helper<$m:ty>) => (
     static $name: Helper<$m> = Helper {
         lock: ::sync::MUTEX_INIT,
         cond: ::sync::CONDVAR_INIT,
-        chan: ::cell::UnsafeCell { value: 0 as *mut Sender<$m> },
+        chan: ::cell::UnsafeCell { value: 0 as *mut ::sync::mpsc::Sender<$m> },
         signal: ::cell::UnsafeCell { value: 0 },
         initialized: ::cell::UnsafeCell { value: false },
         shutdown: ::cell::UnsafeCell { value: false },
     };
-) )
+) }
 
+pub mod backtrace;
 pub mod c;
 pub mod ext;
 pub mod condvar;
@@ -46,7 +48,9 @@ pub mod pipe;
 pub mod process;
 pub mod rwlock;
 pub mod sync;
+pub mod stack_overflow;
 pub mod tcp;
+pub mod thread;
 pub mod thread_local;
 pub mod timer;
 pub mod tty;
@@ -54,6 +58,7 @@ pub mod udp;
 
 pub mod addrinfo {
     pub use sys_common::net::get_host_addresses;
+    pub use sys_common::net::get_address_name;
 }
 
 // FIXME: move these to c module
@@ -118,6 +123,8 @@ pub fn decode_error(errno: i32) -> IoError {
              "invalid handle provided to function"),
         libc::ERROR_NOTHING_TO_TERMINATE =>
             (io::InvalidInput, "no process to kill"),
+        libc::ERROR_ALREADY_EXISTS =>
+            (io::PathAlreadyExists, "path already exists"),
 
         // libuv maps this error code to EISDIR. we do too. if it is found
         // to be incorrect, we can add in some more machinery to only
@@ -138,7 +145,7 @@ pub fn decode_error_detailed(errno: i32) -> IoError {
 }
 
 #[inline]
-pub fn retry<I> (f: || -> I) -> I { f() } // PR rust-lang/rust/#17020
+pub fn retry<I, F>(f: F) -> I where F: FnOnce() -> I { f() } // PR rust-lang/rust/#17020
 
 pub fn ms_to_timeval(ms: u64) -> libc::timeval {
     libc::timeval {
@@ -165,7 +172,7 @@ pub fn init_net() {
     unsafe {
         static START: Once = ONCE_INIT;
 
-        START.doit(|| {
+        START.call_once(|| {
             let mut data: c::WSADATA = mem::zeroed();
             let ret = c::WSAStartup(0x202, // version 2.2
                                     &mut data);

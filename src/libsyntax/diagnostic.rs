@@ -13,7 +13,7 @@ pub use self::RenderSpan::*;
 pub use self::ColorConfig::*;
 use self::Destination::*;
 
-use codemap::{Pos, Span};
+use codemap::{COMMAND_LINE_SP, Pos, Span};
 use codemap;
 use diagnostics;
 
@@ -28,7 +28,7 @@ use term;
 /// maximum number of lines we will print for each error; arbitrary.
 static MAX_LINES: uint = 6u;
 
-#[deriving(Clone)]
+#[derive(Clone, Copy)]
 pub enum RenderSpan {
     /// A FullSpan renders with both with an initial line for the
     /// message, prefixed by file:linenum, followed by a summary of
@@ -39,8 +39,6 @@ pub enum RenderSpan {
     /// by file:linenum.
     FileLine(Span),
 }
-
-impl Copy for RenderSpan {}
 
 impl RenderSpan {
     fn span(self) -> Span {
@@ -56,14 +54,12 @@ impl RenderSpan {
     }
 }
 
-#[deriving(Clone)]
+#[derive(Clone, Copy)]
 pub enum ColorConfig {
     Auto,
     Always,
     Never
 }
-
-impl Copy for ColorConfig {}
 
 pub trait Emitter {
     fn emit(&mut self, cmsp: Option<(&codemap::CodeMap, Span)>,
@@ -75,15 +71,13 @@ pub trait Emitter {
 /// This structure is used to signify that a task has panicked with a fatal error
 /// from the diagnostics. You can use this with the `Any` trait to figure out
 /// how a rustc task died (if so desired).
+#[derive(Copy)]
 pub struct FatalError;
-
-impl Copy for FatalError {}
 
 /// Signifies that the compiler died with an explicit call to `.bug`
 /// or `.span_bug` rather than a failed assertion, etc.
+#[derive(Copy)]
 pub struct ExplicitBug;
-
-impl Copy for ExplicitBug {}
 
 /// A span-handler is like a handler but also
 /// accepts span information for source-location
@@ -129,7 +123,7 @@ impl SpanHandler {
         panic!(ExplicitBug);
     }
     pub fn span_unimpl(&self, sp: Span, msg: &str) -> ! {
-        self.span_bug(sp, format!("unimplemented {}", msg).as_slice());
+        self.span_bug(sp, &format!("unimplemented {}", msg)[]);
     }
     pub fn handler<'a>(&'a self) -> &'a Handler {
         &self.handler
@@ -172,7 +166,7 @@ impl Handler {
                         self.err_count.get());
           }
         }
-        self.fatal(s.as_slice());
+        self.fatal(&s[]);
     }
     pub fn warn(&self, msg: &str) {
         self.emit.borrow_mut().emit(None, msg, None, Warning);
@@ -188,7 +182,7 @@ impl Handler {
         panic!(ExplicitBug);
     }
     pub fn unimpl(&self, msg: &str) -> ! {
-        self.bug(format!("unimplemented {}", msg).as_slice());
+        self.bug(&format!("unimplemented {}", msg)[]);
     }
     pub fn emit(&self,
                 cmsp: Option<(&codemap::CodeMap, Span)>,
@@ -228,7 +222,7 @@ pub fn mk_handler(e: Box<Emitter + Send>) -> Handler {
     }
 }
 
-#[deriving(PartialEq, Clone)]
+#[derive(Copy, PartialEq, Clone, Show)]
 pub enum Level {
     Bug,
     Fatal,
@@ -238,11 +232,9 @@ pub enum Level {
     Help,
 }
 
-impl Copy for Level {}
-
-impl fmt::Show for Level {
+impl fmt::String for Level {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use std::fmt::Show;
+        use std::fmt::String;
 
         match *self {
             Bug => "error: internal compiler error".fmt(f),
@@ -285,7 +277,7 @@ fn print_maybe_styled(w: &mut EmitterWriter,
             // to be miscolored. We assume this is rare enough that we don't
             // have to worry about it.
             if msg.ends_with("\n") {
-                try!(t.write_str(msg.slice_to(msg.len()-1)));
+                try!(t.write_str(&msg[0..(msg.len()-1)]));
                 try!(t.reset());
                 try!(t.write_str("\n"));
             } else {
@@ -307,16 +299,16 @@ fn print_diagnostic(dst: &mut EmitterWriter, topic: &str, lvl: Level,
     }
 
     try!(print_maybe_styled(dst,
-                            format!("{}: ", lvl.to_string()).as_slice(),
+                            &format!("{}: ", lvl.to_string())[],
                             term::attr::ForegroundColor(lvl.color())));
     try!(print_maybe_styled(dst,
-                            format!("{}", msg).as_slice(),
+                            &format!("{}", msg)[],
                             term::attr::Bold));
 
     match code {
         Some(code) => {
             let style = term::attr::ForegroundColor(term::color::BRIGHT_MAGENTA);
-            try!(print_maybe_styled(dst, format!(" [{}]", code.clone()).as_slice(), style));
+            try!(print_maybe_styled(dst, &format!(" [{}]", code.clone())[], style));
         }
         None => ()
     }
@@ -376,13 +368,16 @@ impl Emitter for EmitterWriter {
             cmsp: Option<(&codemap::CodeMap, Span)>,
             msg: &str, code: Option<&str>, lvl: Level) {
         let error = match cmsp {
+            Some((cm, COMMAND_LINE_SP)) => emit(self, cm,
+                                                FileLine(COMMAND_LINE_SP),
+                                                msg, code, lvl, false),
             Some((cm, sp)) => emit(self, cm, FullSpan(sp), msg, code, lvl, false),
             None => print_diagnostic(self, "", lvl, msg, code),
         };
 
         match error {
             Ok(()) => {}
-            Err(e) => panic!("failed to print diagnostics: {}", e),
+            Err(e) => panic!("failed to print diagnostics: {:?}", e),
         }
     }
 
@@ -390,7 +385,7 @@ impl Emitter for EmitterWriter {
                    sp: RenderSpan, msg: &str, lvl: Level) {
         match emit(self, cm, sp, msg, None, lvl, true) {
             Ok(()) => {}
-            Err(e) => panic!("failed to print diagnostics: {}", e),
+            Err(e) => panic!("failed to print diagnostics: {:?}", e),
         }
     }
 }
@@ -398,32 +393,37 @@ impl Emitter for EmitterWriter {
 fn emit(dst: &mut EmitterWriter, cm: &codemap::CodeMap, rsp: RenderSpan,
         msg: &str, code: Option<&str>, lvl: Level, custom: bool) -> io::IoResult<()> {
     let sp = rsp.span();
-    let ss = cm.span_to_string(sp);
-    let lines = cm.span_to_lines(sp);
+    let ss = if sp == COMMAND_LINE_SP {
+        "<command line option>".to_string()
+    } else {
+        cm.span_to_string(sp)
+    };
     if custom {
         // we want to tell compiletest/runtest to look at the last line of the
         // span (since `custom_highlight_lines` displays an arrow to the end of
         // the span)
         let span_end = Span { lo: sp.hi, hi: sp.hi, expn_id: sp.expn_id};
         let ses = cm.span_to_string(span_end);
-        try!(print_diagnostic(dst, ses.as_slice(), lvl, msg, code));
+        try!(print_diagnostic(dst, &ses[], lvl, msg, code));
         if rsp.is_full_span() {
-            try!(custom_highlight_lines(dst, cm, sp, lvl, lines));
+            try!(custom_highlight_lines(dst, cm, sp, lvl, cm.span_to_lines(sp)));
         }
     } else {
-        try!(print_diagnostic(dst, ss.as_slice(), lvl, msg, code));
+        try!(print_diagnostic(dst, &ss[], lvl, msg, code));
         if rsp.is_full_span() {
-            try!(highlight_lines(dst, cm, sp, lvl, lines));
+            try!(highlight_lines(dst, cm, sp, lvl, cm.span_to_lines(sp)));
         }
     }
-    try!(print_macro_backtrace(dst, cm, sp));
+    if sp != COMMAND_LINE_SP {
+        try!(print_macro_backtrace(dst, cm, sp));
+    }
     match code {
         Some(code) =>
             match dst.registry.as_ref().and_then(|registry| registry.find_description(code)) {
                 Some(_) => {
-                    try!(print_diagnostic(dst, ss.as_slice(), Help,
-                                          format!("pass `--explain {}` to see a detailed \
-                                                   explanation", code).as_slice(), None));
+                    try!(print_diagnostic(dst, &ss[], Help,
+                                          &format!("pass `--explain {}` to see a detailed \
+                                                   explanation", code)[], None));
                 }
                 None => ()
             },
@@ -440,9 +440,9 @@ fn highlight_lines(err: &mut EmitterWriter,
     let fm = &*lines.file;
 
     let mut elided = false;
-    let mut display_lines = lines.lines.as_slice();
+    let mut display_lines = &lines.lines[];
     if display_lines.len() > MAX_LINES {
-        display_lines = display_lines[0u..MAX_LINES];
+        display_lines = &display_lines[0u..MAX_LINES];
         elided = true;
     }
     // Print the offending lines
@@ -502,7 +502,7 @@ fn highlight_lines(err: &mut EmitterWriter,
             }
         }
         try!(print_maybe_styled(err,
-                                format!("{}\n", s).as_slice(),
+                                &format!("{}\n", s)[],
                                 term::attr::ForegroundColor(lvl.color())));
     }
     Ok(())
@@ -522,7 +522,7 @@ fn custom_highlight_lines(w: &mut EmitterWriter,
                           -> io::IoResult<()> {
     let fm = &*lines.file;
 
-    let lines = lines.lines.as_slice();
+    let lines = &lines.lines[];
     if lines.len() > MAX_LINES {
         if let Some(line) = fm.get_line(lines[0]) {
             try!(write!(&mut w.dst, "{}:{} {}\n", fm.name,
@@ -553,7 +553,7 @@ fn custom_highlight_lines(w: &mut EmitterWriter,
     s.push('^');
     s.push('\n');
     print_maybe_styled(w,
-                       s.as_slice(),
+                       &s[],
                        term::attr::ForegroundColor(lvl.color()))
 }
 
@@ -568,12 +568,12 @@ fn print_macro_backtrace(w: &mut EmitterWriter,
                 codemap::MacroAttribute => ("#[", "]"),
                 codemap::MacroBang => ("", "!")
             };
-            try!(print_diagnostic(w, ss.as_slice(), Note,
-                                  format!("in expansion of {}{}{}", pre,
+            try!(print_diagnostic(w, &ss[], Note,
+                                  &format!("in expansion of {}{}{}", pre,
                                           ei.callee.name,
-                                          post).as_slice(), None));
+                                          post)[], None));
             let ss = cm.span_to_string(ei.call_site);
-            try!(print_diagnostic(w, ss.as_slice(), Note, "expansion site", None));
+            try!(print_diagnostic(w, &ss[], Note, "expansion site", None));
             Ok(Some(ei.call_site))
         }
         None => Ok(None)
@@ -581,9 +581,11 @@ fn print_macro_backtrace(w: &mut EmitterWriter,
     cs.map_or(Ok(()), |call_site| print_macro_backtrace(w, cm, call_site))
 }
 
-pub fn expect<T>(diag: &SpanHandler, opt: Option<T>, msg: || -> String) -> T {
+pub fn expect<T, M>(diag: &SpanHandler, opt: Option<T>, msg: M) -> T where
+    M: FnOnce() -> String,
+{
     match opt {
         Some(t) => t,
-        None => diag.handler().bug(msg().as_slice()),
+        None => diag.handler().bug(&msg()[]),
     }
 }

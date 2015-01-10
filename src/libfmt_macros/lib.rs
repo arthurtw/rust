@@ -15,7 +15,8 @@
 //! generated instead.
 
 #![crate_name = "fmt_macros"]
-#![experimental]
+#![unstable]
+#![staged_api]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
@@ -23,7 +24,9 @@
        html_root_url = "http://doc.rust-lang.org/nightly/",
        html_playground_url = "http://play.rust-lang.org/")]
 
-#![feature(macro_rules, globs, import_shadowing)]
+#![feature(slicing_syntax)]
+#![allow(unknown_features)] #![feature(int_uint)]
+
 pub use self::Piece::*;
 pub use self::Position::*;
 pub use self::Alignment::*;
@@ -35,7 +38,7 @@ use std::string;
 
 /// A piece is a portion of the format string which represents the next part
 /// to emit. These are emitted as a stream by the `Parser` class.
-#[deriving(PartialEq)]
+#[derive(Copy, PartialEq)]
 pub enum Piece<'a> {
     /// A literal string which should directly be emitted
     String(&'a str),
@@ -44,10 +47,8 @@ pub enum Piece<'a> {
     NextArgument(Argument<'a>),
 }
 
-impl<'a> Copy for Piece<'a> {}
-
 /// Representation of an argument specification.
-#[deriving(PartialEq)]
+#[derive(Copy, PartialEq)]
 pub struct Argument<'a> {
     /// Where to find this argument
     pub position: Position<'a>,
@@ -55,10 +56,8 @@ pub struct Argument<'a> {
     pub format: FormatSpec<'a>,
 }
 
-impl<'a> Copy for Argument<'a> {}
-
 /// Specification for the formatting of an argument in the format string.
-#[deriving(PartialEq)]
+#[derive(Copy, PartialEq)]
 pub struct FormatSpec<'a> {
     /// Optionally specified character to fill alignment with
     pub fill: Option<char>,
@@ -76,10 +75,8 @@ pub struct FormatSpec<'a> {
     pub ty: &'a str
 }
 
-impl<'a> Copy for FormatSpec<'a> {}
-
 /// Enum describing where an argument for a format can be located.
-#[deriving(PartialEq)]
+#[derive(Copy, PartialEq)]
 pub enum Position<'a> {
     /// The argument will be in the next position. This is the default.
     ArgumentNext,
@@ -89,10 +86,8 @@ pub enum Position<'a> {
     ArgumentNamed(&'a str),
 }
 
-impl<'a> Copy for Position<'a> {}
-
 /// Enum of alignments which are supported.
-#[deriving(PartialEq)]
+#[derive(Copy, PartialEq)]
 pub enum Alignment {
     /// The value will be aligned to the left.
     AlignLeft,
@@ -104,11 +99,9 @@ pub enum Alignment {
     AlignUnknown,
 }
 
-impl Copy for Alignment {}
-
 /// Various flags which can be applied to format strings. The meaning of these
 /// flags is defined by the formatters themselves.
-#[deriving(PartialEq)]
+#[derive(Copy, PartialEq)]
 pub enum Flag {
     /// A `+` will be used to denote positive numbers.
     FlagSignPlus,
@@ -122,11 +115,9 @@ pub enum Flag {
     FlagSignAwareZeroPad,
 }
 
-impl Copy for Flag {}
-
 /// A count is used for the precision and width parameters of an integer, and
 /// can reference either an argument or a literal integer.
-#[deriving(PartialEq)]
+#[derive(Copy, PartialEq)]
 pub enum Count<'a> {
     /// The count is specified explicitly.
     CountIs(uint),
@@ -140,8 +131,6 @@ pub enum Count<'a> {
     CountImplied,
 }
 
-impl<'a> Copy for Count<'a> {}
-
 /// The parser structure for interpreting the input format string. This is
 /// modelled as an iterator over `Piece` structures to form a stream of tokens
 /// being output.
@@ -150,12 +139,14 @@ impl<'a> Copy for Count<'a> {}
 /// necessary there's probably lots of room for improvement performance-wise.
 pub struct Parser<'a> {
     input: &'a str,
-    cur: str::CharOffsets<'a>,
+    cur: str::CharIndices<'a>,
     /// Error messages accumulated during parsing
     pub errors: Vec<string::String>,
 }
 
-impl<'a> Iterator<Piece<'a>> for Parser<'a> {
+impl<'a> Iterator for Parser<'a> {
+    type Item = Piece<'a>;
+
     fn next(&mut self) -> Option<Piece<'a>> {
         match self.cur.clone().next() {
             Some((pos, '{')) => {
@@ -185,7 +176,7 @@ impl<'a> Iterator<Piece<'a>> for Parser<'a> {
 
 impl<'a> Parser<'a> {
     /// Creates a new parser for the given format string
-    pub fn new<'a>(s: &'a str) -> Parser<'a> {
+    pub fn new(s: &'a str) -> Parser<'a> {
         Parser {
             input: s,
             cur: s.char_indices(),
@@ -222,13 +213,12 @@ impl<'a> Parser<'a> {
                 self.cur.next();
             }
             Some((_, other)) => {
-                self.err(format!("expected `{}`, found `{}`",
-                                 c,
-                                 other).as_slice());
+                self.err(&format!("expected `{:?}`, found `{:?}`", c,
+                                  other)[]);
             }
             None => {
-                self.err(format!("expected `{}` but string was terminated",
-                                 c).as_slice());
+                self.err(&format!("expected `{:?}` but string was terminated",
+                                  c)[]);
             }
         }
     }
@@ -251,12 +241,12 @@ impl<'a> Parser<'a> {
             // we may not consume the character, so clone the iterator
             match self.cur.clone().next() {
                 Some((pos, '}')) | Some((pos, '{')) => {
-                    return self.input.slice(start, pos);
+                    return &self.input[start..pos];
                 }
                 Some(..) => { self.cur.next(); }
                 None => {
                     self.cur.next();
-                    return self.input.slice(start, self.input.len());
+                    return &self.input[start..self.input.len()];
                 }
             }
         }
@@ -296,7 +286,7 @@ impl<'a> Parser<'a> {
             flags: 0,
             precision: CountImplied,
             width: CountImplied,
-            ty: self.input.slice(0, 0),
+            ty: &self.input[0..0],
         };
         if !self.consume(':') { return spec }
 
@@ -405,7 +395,7 @@ impl<'a> Parser<'a> {
                 self.cur.next();
                 pos
             }
-            Some(..) | None => { return self.input.slice(0, 0); }
+            Some(..) | None => { return &self.input[0..0]; }
         };
         let mut end;
         loop {
@@ -417,7 +407,7 @@ impl<'a> Parser<'a> {
                 None => { end = self.input.len(); break }
             }
         }
-        self.input.slice(start, end)
+        &self.input[start..end]
     }
 
     /// Optionally parses an integer at the current position. This doesn't deal

@@ -38,11 +38,9 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 // OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#![feature(slicing_syntax)]
-
-use std::io;
-use std::io::{BufferedWriter, File};
 use std::cmp::min;
+use std::io::{BufferedWriter, File};
+use std::io;
 use std::num::Float;
 use std::os;
 
@@ -74,22 +72,24 @@ impl<'a> AAGen<'a> {
         AAGen { rng: rng, data: data }
     }
 }
-impl<'a> Iterator<u8> for AAGen<'a> {
+impl<'a> Iterator for AAGen<'a> {
+    type Item = u8;
+
     fn next(&mut self) -> Option<u8> {
         let r = self.rng.gen();
         self.data.iter()
-            .skip_while(|pc| pc.val0() < r)
+            .skip_while(|pc| pc.0 < r)
             .map(|&(_, c)| c)
             .next()
     }
 }
 
-fn make_fasta<W: Writer, I: Iterator<u8>>(
+fn make_fasta<W: Writer, I: Iterator<Item=u8>>(
     wr: &mut W, header: &str, mut it: I, mut n: uint)
     -> std::io::IoResult<()>
 {
     try!(wr.write(header.as_bytes()));
-    let mut line = [0u8, .. LINE_LENGTH + 1];
+    let mut line = [0u8; LINE_LENGTH + 1];
     while n > 0 {
         let nb = min(LINE_LENGTH, n);
         for i in range(0, nb) {
@@ -97,7 +97,7 @@ fn make_fasta<W: Writer, I: Iterator<u8>>(
         }
         n -= nb;
         line[nb] = '\n' as u8;
-        try!(wr.write(line[..nb+1]));
+        try!(wr.write(&line[..(nb+1)]));
     }
     Ok(())
 }
@@ -110,7 +110,7 @@ fn run<W: Writer>(writer: &mut W) -> std::io::IoResult<()> {
     } else if args.len() <= 1u {
         1000
     } else {
-        from_str(args[1].as_slice()).unwrap()
+        args[1].parse().unwrap()
     };
 
     let rng = &mut MyRandom::new();

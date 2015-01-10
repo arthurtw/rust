@@ -11,16 +11,18 @@
 // Test that attempts to implicitly coerce a value into an
 // object respect the lifetime bound on the object type.
 
+#![feature(box_syntax)]
+
 trait Foo {}
 impl<'a> Foo for &'a [u8] {}
 
 fn a(v: &[u8]) -> Box<Foo + 'static> {
-    let x: Box<Foo + 'static> = box v; //~ ERROR does not outlive
+    let x: Box<Foo + 'static> = box v; //~ ERROR declared lifetime bound not satisfied
     x
 }
 
 fn b(v: &[u8]) -> Box<Foo + 'static> {
-    box v //~ ERROR does not outlive
+    box v //~ ERROR declared lifetime bound not satisfied
 }
 
 fn c(v: &[u8]) -> Box<Foo> {
@@ -28,7 +30,7 @@ fn c(v: &[u8]) -> Box<Foo> {
 }
 
 fn d<'a,'b>(v: &'a [u8]) -> Box<Foo+'b> {
-    box v //~ ERROR does not outlive
+    box v //~ ERROR declared lifetime bound not satisfied
 }
 
 fn e<'a:'b,'b>(v: &'a [u8]) -> Box<Foo+'b> {

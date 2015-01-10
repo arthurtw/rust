@@ -8,7 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::task::spawn;
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
+use std::thread::Thread;
 
 struct Pair {
     a: int,
@@ -18,10 +21,8 @@ struct Pair {
 pub fn main() {
     let z = box Pair { a : 10, b : 12};
 
-    let f: proc():Send = proc() {
+    let _t = Thread::spawn(move|| {
         assert_eq!(z.a, 10);
         assert_eq!(z.b, 12);
-    };
-
-    spawn(f);
+    });
 }

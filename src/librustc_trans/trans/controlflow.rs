@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use llvm::*;
+use llvm::ValueRef;
 use middle::def;
 use middle::lang_items::{PanicFnLangItem, PanicBoundsCheckFnLangItem};
 use trans::_match;
@@ -48,7 +48,7 @@ pub fn trans_stmt<'blk, 'tcx>(cx: Block<'blk, 'tcx>,
     debug!("trans_stmt({})", s.repr(cx.tcx()));
 
     if cx.sess().asm_comments() {
-        add_span_comment(cx, s.span, s.repr(cx.tcx()).as_slice());
+        add_span_comment(cx, s.span, &s.repr(cx.tcx())[]);
     }
 
     let mut bcx = cx;
@@ -87,7 +87,7 @@ pub fn trans_stmt_semi<'blk, 'tcx>(cx: Block<'blk, 'tcx>, e: &ast::Expr)
                                    -> Block<'blk, 'tcx> {
     let _icx = push_ctxt("trans_stmt_semi");
     let ty = expr_ty(cx, e);
-    if ty::type_needs_drop(cx.tcx(), ty) {
+    if type_needs_drop(cx.tcx(), ty) {
         expr::trans_to_lvalue(cx, e, "stmt").bcx
     } else {
         expr::trans_into(cx, e, expr::Ignore)
@@ -112,8 +112,17 @@ pub fn trans_block<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
 
     if dest != expr::Ignore {
         let block_ty = node_id_type(bcx, b.id);
+
         if b.expr.is_none() || type_is_zero_size(bcx.ccx(), block_ty) {
             dest = expr::Ignore;
+        } else if b.expr.is_some() {
+            // If the block has an expression, but that expression isn't reachable,
+            // don't save into the destination given, ignore it.
+            if let Some(ref cfg) = bcx.fcx.cfg {
+                if !cfg.node_is_reachable(b.expr.as_ref().unwrap().id) {
+                    dest = expr::Ignore;
+                }
+            }
         }
     }
 
@@ -179,7 +188,7 @@ pub fn trans_if<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
     }
 
     let name = format!("then-block-{}-", thn.id);
-    let then_bcx_in = bcx.fcx.new_id_block(name.as_slice(), thn.id);
+    let then_bcx_in = bcx.fcx.new_id_block(&name[], thn.id);
     let then_bcx_out = trans_block(then_bcx_in, &*thn, dest);
     trans::debuginfo::clear_source_location(bcx.fcx);
 
@@ -256,7 +265,8 @@ pub fn trans_for<'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
                              pat: &ast::Pat,
                              head: &ast::Expr,
                              body: &ast::Block)
-                             -> Block<'blk, 'tcx> {
+                             -> Block<'blk, 'tcx>
+{
     let _icx = push_ctxt("trans_for");
 
     //            bcx
@@ -277,6 +287,7 @@ pub fn trans_for<'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
     debug!("iterator type is {}, datum type is {}",
            ppaux::ty_to_string(bcx.tcx(), iterator_type),
            ppaux::ty_to_string(bcx.tcx(), iterator_datum.ty));
+
     let lliterator = load_ty(bcx, iterator_datum.val, iterator_datum.ty);
 
     // Create our basic blocks and set up our loop cleanups.
@@ -296,7 +307,9 @@ pub fn trans_for<'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
                                      .borrow())[method_call]
                                      .ty;
     let method_type = monomorphize_type(loopback_bcx_in, method_type);
-    let method_result_type = ty::ty_fn_ret(method_type).unwrap();
+    let method_result_type =
+        ty::assert_no_late_bound_regions( // LB regions are instantiated in invoked methods
+            loopback_bcx_in.tcx(), &ty::ty_fn_ret(method_type)).unwrap();
     let option_cleanup_scope = body_bcx_in.fcx.push_custom_cleanup_scope();
     let option_cleanup_scope_id = cleanup::CustomScope(option_cleanup_scope);
 
@@ -355,6 +368,8 @@ pub fn trans_for<'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
                                        pat,
                                        llpayload,
                                        binding_cleanup_scope_id);
+
+    debuginfo::create_for_loop_var_metadata(body_bcx_in, pat);
 
     // Codegen the body.
     body_bcx_out = trans_block(body_bcx_out, body, expr::Ignore);
@@ -424,8 +439,8 @@ pub fn trans_break_cont<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
             match bcx.tcx().def_map.borrow().get(&expr_id) {
                 Some(&def::DefLabel(loop_id)) => loop_id,
                 ref r => {
-                    bcx.tcx().sess.bug(format!("{} in def-map for label",
-                                               r).as_slice())
+                    bcx.tcx().sess.bug(&format!("{:?} in def-map for label",
+                                               r)[])
                 }
             }
         }
@@ -489,7 +504,7 @@ pub fn trans_fail<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
 
     let v_str = C_str_slice(ccx, fail_str);
     let loc = bcx.sess().codemap().lookup_char_pos(sp.lo);
-    let filename = token::intern_and_get_ident(loc.file.name.as_slice());
+    let filename = token::intern_and_get_ident(&loc.file.name[]);
     let filename = C_str_slice(ccx, filename);
     let line = C_uint(ccx, loc.line);
     let expr_file_line_const = C_struct(ccx, &[v_str, filename, line], false);
@@ -498,7 +513,7 @@ pub fn trans_fail<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
     let did = langcall(bcx, Some(sp), "", PanicFnLangItem);
     let bcx = callee::trans_lang_call(bcx,
                                       did,
-                                      args.as_slice(),
+                                      &args[],
                                       Some(expr::Ignore)).bcx;
     Unreachable(bcx);
     return bcx;
@@ -514,7 +529,7 @@ pub fn trans_fail_bounds_check<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
 
     // Extract the file/line from the span
     let loc = bcx.sess().codemap().lookup_char_pos(sp.lo);
-    let filename = token::intern_and_get_ident(loc.file.name.as_slice());
+    let filename = token::intern_and_get_ident(&loc.file.name[]);
 
     // Invoke the lang item
     let filename = C_str_slice(ccx,  filename);
@@ -525,7 +540,7 @@ pub fn trans_fail_bounds_check<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
     let did = langcall(bcx, Some(sp), "", PanicBoundsCheckFnLangItem);
     let bcx = callee::trans_lang_call(bcx,
                                       did,
-                                      args.as_slice(),
+                                      &args[],
                                       Some(expr::Ignore)).bcx;
     Unreachable(bcx);
     return bcx;

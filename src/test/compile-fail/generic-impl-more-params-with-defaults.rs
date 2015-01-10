@@ -8,8 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(default_type_params)]
-
 struct Heap;
 
 struct Vec<T, A = Heap>;
@@ -19,6 +17,6 @@ impl<T, A = Heap> Vec<T, A> {
 }
 
 fn main() {
-    Vec::<int, Heap, bool>::new();
+    Vec::<isize, Heap, bool>::new();
     //~^ ERROR too many type parameters provided
 }

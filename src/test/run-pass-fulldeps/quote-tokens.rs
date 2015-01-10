@@ -33,11 +33,13 @@ fn syntax_extension(cx: &ExtCtxt) {
     let _g: P<syntax::ast::Expr> = quote_expr!(cx, true);
     let _h: P<syntax::ast::Expr> = quote_expr!(cx, 'a');
 
-    let i: Option<P<syntax::ast::Item>> = quote_item!(cx, #[deriving(Eq)] struct Foo; );
+    let i: Option<P<syntax::ast::Item>> = quote_item!(cx, #[derive(Eq)] struct Foo; );
     assert!(i.is_some());
 
     let _j: P<syntax::ast::Method> = quote_method!(cx, fn foo(&self) {});
     let _k: P<syntax::ast::Method> = quote_method!(cx, #[doc = "hello"] fn foo(&self) {});
+
+    let _l: P<syntax::ast::Ty> = quote_ty!(cx, &int);
 }
 
 fn main() {

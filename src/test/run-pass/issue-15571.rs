@@ -8,6 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
 fn match_on_local() {
     let mut foo = Some(box 5i);
     match foo {
@@ -45,7 +48,7 @@ fn match_on_binding() {
 
 fn match_on_upvar() {
     let mut foo = Some(box 8i);
-    (proc() {
+    let f = move|:| {
         match foo {
             None => {},
             Some(x) => {
@@ -53,7 +56,8 @@ fn match_on_upvar() {
             }
         }
         println!("'{}'", foo.unwrap());
-    })();
+    };
+    f();
 }
 
 fn main() {

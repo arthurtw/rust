@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014-2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -34,20 +34,23 @@
 //! will want to make use of some form of **interior mutability** through the
 //! `Cell` or `RefCell` types.
 
-#![macro_escape]
-#![experimental]
+#![stable]
 
-use prelude::*;
+use prelude::v1::*;
 
 use cell::UnsafeCell;
 
-// Sure wish we had macro hygiene, no?
-#[doc(hidden)] pub use self::imp::Key as KeyInner;
-#[doc(hidden)] pub use self::imp::destroy_value;
-#[doc(hidden)] pub use sys_common::thread_local::INIT_INNER as OS_INIT_INNER;
-#[doc(hidden)] pub use sys_common::thread_local::StaticKey as OsStaticKey;
-
+#[macro_use]
 pub mod scoped;
+
+// Sure wish we had macro hygiene, no?
+#[doc(hidden)]
+pub mod __impl {
+    pub use super::imp::Key as KeyInner;
+    pub use super::imp::destroy_value;
+    pub use sys_common::thread_local::INIT_INNER as OS_INIT_INNER;
+    pub use sys_common::thread_local::StaticKey as OsStaticKey;
+}
 
 /// A thread local storage key which owns its contents.
 ///
@@ -68,6 +71,7 @@ pub mod scoped;
 ///
 /// ```
 /// use std::cell::RefCell;
+/// use std::thread::Thread;
 ///
 /// thread_local!(static FOO: RefCell<uint> = RefCell::new(1));
 ///
@@ -77,7 +81,7 @@ pub mod scoped;
 /// });
 ///
 /// // each thread starts out with the initial value of 1
-/// spawn(proc() {
+/// Thread::spawn(move|| {
 ///     FOO.with(|f| {
 ///         assert_eq!(*f.borrow(), 1);
 ///         *f.borrow_mut() = 3;
@@ -89,6 +93,7 @@ pub mod scoped;
 ///     assert_eq!(*f.borrow(), 2);
 /// });
 /// ```
+#[stable]
 pub struct Key<T> {
     // The key itself may be tagged with #[thread_local], and this `Key` is
     // stored as a `static`, and it's not valid for a static to reference the
@@ -99,7 +104,7 @@ pub struct Key<T> {
     // This is trivially devirtualizable by LLVM because we never store anything
     // to this field and rustc can declare the `static` as constant as well.
     #[doc(hidden)]
-    pub inner: fn() -> &'static KeyInner<UnsafeCell<Option<T>>>,
+    pub inner: fn() -> &'static __impl::KeyInner<UnsafeCell<Option<T>>>,
 
     // initialization routine to invoke to create a value
     #[doc(hidden)]
@@ -108,18 +113,18 @@ pub struct Key<T> {
 
 /// Declare a new thread local storage key of type `std::thread_local::Key`.
 #[macro_export]
-#[doc(hidden)]
-macro_rules! thread_local(
+#[stable]
+macro_rules! thread_local {
     (static $name:ident: $t:ty = $init:expr) => (
         static $name: ::std::thread_local::Key<$t> = {
             use std::cell::UnsafeCell as __UnsafeCell;
-            use std::thread_local::KeyInner as __KeyInner;
+            use std::thread_local::__impl::KeyInner as __KeyInner;
             use std::option::Option as __Option;
             use std::option::Option::None as __None;
 
             __thread_local_inner!(static __KEY: __UnsafeCell<__Option<$t>> = {
                 __UnsafeCell { value: __None }
-            })
+            });
             fn __init() -> $t { $init }
             fn __getit() -> &'static __KeyInner<__UnsafeCell<__Option<$t>>> {
                 &__KEY
@@ -130,13 +135,13 @@ macro_rules! thread_local(
     (pub static $name:ident: $t:ty = $init:expr) => (
         pub static $name: ::std::thread_local::Key<$t> = {
             use std::cell::UnsafeCell as __UnsafeCell;
-            use std::thread_local::KeyInner as __KeyInner;
+            use std::thread_local::__impl::KeyInner as __KeyInner;
             use std::option::Option as __Option;
             use std::option::Option::None as __None;
 
             __thread_local_inner!(static __KEY: __UnsafeCell<__Option<$t>> = {
                 __UnsafeCell { value: __None }
-            })
+            });
             fn __init() -> $t { $init }
             fn __getit() -> &'static __KeyInner<__UnsafeCell<__Option<$t>>> {
                 &__KEY
@@ -144,7 +149,7 @@ macro_rules! thread_local(
             ::std::thread_local::Key { inner: __getit, init: __init }
         };
     );
-)
+}
 
 // Macro pain #4586:
 //
@@ -167,45 +172,80 @@ macro_rules! thread_local(
 // itself. Woohoo.
 
 #[macro_export]
-macro_rules! __thread_local_inner(
+#[doc(hidden)]
+macro_rules! __thread_local_inner {
     (static $name:ident: $t:ty = $init:expr) => (
-        #[cfg_attr(any(target_os = "macos", target_os = "linux"), thread_local)]
-        static $name: ::std::thread_local::KeyInner<$t> =
+        #[cfg_attr(all(any(target_os = "macos", target_os = "linux"),
+                       not(target_arch = "aarch64")),
+                   thread_local)]
+        static $name: ::std::thread_local::__impl::KeyInner<$t> =
             __thread_local_inner!($init, $t);
     );
     (pub static $name:ident: $t:ty = $init:expr) => (
-        #[cfg_attr(any(target_os = "macos", target_os = "linux"), thread_local)]
-        pub static $name: ::std::thread_local::KeyInner<$t> =
+        #[cfg_attr(all(any(target_os = "macos", target_os = "linux"),
+                       not(target_arch = "aarch64")),
+                   thread_local)]
+        pub static $name: ::std::thread_local::__impl::KeyInner<$t> =
             __thread_local_inner!($init, $t);
     );
     ($init:expr, $t:ty) => ({
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
-        const INIT: ::std::thread_local::KeyInner<$t> = {
-            ::std::thread_local::KeyInner {
+        #[cfg(all(any(target_os = "macos", target_os = "linux"), not(target_arch = "aarch64")))]
+        const _INIT: ::std::thread_local::__impl::KeyInner<$t> = {
+            ::std::thread_local::__impl::KeyInner {
                 inner: ::std::cell::UnsafeCell { value: $init },
                 dtor_registered: ::std::cell::UnsafeCell { value: false },
                 dtor_running: ::std::cell::UnsafeCell { value: false },
-                marker: ::std::kinds::marker::NoCopy,
             }
         };
 
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        const INIT: ::std::thread_local::KeyInner<$t> = {
+        #[cfg(any(not(any(target_os = "macos", target_os = "linux")), target_arch = "aarch64"))]
+        const _INIT: ::std::thread_local::__impl::KeyInner<$t> = {
             unsafe extern fn __destroy(ptr: *mut u8) {
-                ::std::thread_local::destroy_value::<$t>(ptr);
+                ::std::thread_local::__impl::destroy_value::<$t>(ptr);
             }
-            ::std::thread_local::KeyInner {
+
+            ::std::thread_local::__impl::KeyInner {
                 inner: ::std::cell::UnsafeCell { value: $init },
-                os: ::std::thread_local::OsStaticKey {
-                    inner: ::std::thread_local::OS_INIT_INNER,
-                    dtor: ::std::option::Option::Some(__destroy),
+                os: ::std::thread_local::__impl::OsStaticKey {
+                    inner: ::std::thread_local::__impl::OS_INIT_INNER,
+                    dtor: ::std::option::Option::Some(__destroy as unsafe extern fn(*mut u8)),
                 },
             }
         };
 
-        INIT
+        _INIT
     });
-)
+}
+
+/// Indicator of the state of a thread local storage key.
+#[unstable = "state querying was recently added"]
+#[derive(Eq, PartialEq, Copy)]
+pub enum State {
+    /// All keys are in this state whenever a thread starts. Keys will
+    /// transition to the `Valid` state once the first call to `with` happens
+    /// and the initialization expression succeeds.
+    ///
+    /// Keys in the `Uninitialized` state will yield a reference to the closure
+    /// passed to `with` so long as the initialization routine does not panic.
+    Uninitialized,
+
+    /// Once a key has been accessed successfully, it will enter the `Valid`
+    /// state. Keys in the `Valid` state will remain so until the thread exits,
+    /// at which point the destructor will be run and the key will enter the
+    /// `Destroyed` state.
+    ///
+    /// Keys in the `Valid` state will be guaranteed to yield a reference to the
+    /// closure passed to `with`.
+    Valid,
+
+    /// When a thread exits, the destructors for keys will be run (if
+    /// necessary). While a destructor is running, and possibly after a
+    /// destructor has run, a key is in the `Destroyed` state.
+    ///
+    /// Keys in the `Destroyed` states will trigger a panic when accessed via
+    /// `with`.
+    Destroyed,
+}
 
 impl<T: 'static> Key<T> {
     /// Acquire a reference to the value in this TLS key.
@@ -218,34 +258,75 @@ impl<T: 'static> Key<T> {
     /// This function will `panic!()` if the key currently has its
     /// destructor running, and it **may** panic if the destructor has
     /// previously been run for this thread.
-    pub fn with<R>(&'static self, f: |&T| -> R) -> R {
+    #[stable]
+    pub fn with<F, R>(&'static self, f: F) -> R
+                      where F: FnOnce(&T) -> R {
         let slot = (self.inner)();
         unsafe {
             let slot = slot.get().expect("cannot access a TLS value during or \
                                           after it is destroyed");
-            if (*slot.get()).is_none() {
-                *slot.get() = Some((self.init)());
-            }
-            f((*slot.get()).as_ref().unwrap())
+            f(match *slot.get() {
+                Some(ref inner) => inner,
+                None => self.init(slot),
+            })
         }
     }
 
-    /// Test this TLS key to determine whether its value has been destroyed for
-    /// the current thread or not.
-    ///
-    /// This will not initialize the key if it is not already initialized.
-    pub fn destroyed(&'static self) -> bool {
-        unsafe { (self.inner)().get().is_none() }
+    unsafe fn init(&self, slot: &UnsafeCell<Option<T>>) -> &T {
+        // Execute the initialization up front, *then* move it into our slot,
+        // just in case initialization fails.
+        let value = (self.init)();
+        let ptr = slot.get();
+        *ptr = Some(value);
+        (*ptr).as_ref().unwrap()
     }
+
+    /// Query the current state of this key.
+    ///
+    /// A key is initially in the `Uninitialized` state whenever a thread
+    /// starts. It will remain in this state up until the first call to `with`
+    /// within a thread has run the initialization expression successfully.
+    ///
+    /// Once the initialization expression succeeds, the key transitions to the
+    /// `Valid` state which will guarantee that future calls to `with` will
+    /// succeed within the thread.
+    ///
+    /// When a thread exits, each key will be destroyed in turn, and as keys are
+    /// destroyed they will enter the `Destroyed` state just before the
+    /// destructor starts to run. Keys may remain in the `Destroyed` state after
+    /// destruction has completed. Keys without destructors (e.g. with types
+    /// that are `Copy`), may never enter the `Destroyed` state.
+    ///
+    /// Keys in the `Uninitialized` can be accessed so long as the
+    /// initialization does not panic. Keys in the `Valid` state are guaranteed
+    /// to be able to be accessed. Keys in the `Destroyed` state will panic on
+    /// any call to `with`.
+    #[unstable = "state querying was recently added"]
+    pub fn state(&'static self) -> State {
+        unsafe {
+            match (self.inner)().get() {
+                Some(cell) => {
+                    match *cell.get() {
+                        Some(..) => State::Valid,
+                        None => State::Uninitialized,
+                    }
+                }
+                None => State::Destroyed,
+            }
+        }
+    }
+
+    /// Deprecated
+    #[deprecated = "function renamed to state() and returns more info"]
+    pub fn destroyed(&'static self) -> bool { self.state() == State::Destroyed }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(all(any(target_os = "macos", target_os = "linux"), not(target_arch = "aarch64")))]
 mod imp {
-    use prelude::*;
+    use prelude::v1::*;
 
     use cell::UnsafeCell;
     use intrinsics;
-    use kinds::marker;
     use ptr;
 
     #[doc(hidden)]
@@ -262,10 +343,9 @@ mod imp {
         // these variables are thread-local, not global.
         pub dtor_registered: UnsafeCell<bool>, // should be Cell
         pub dtor_running: UnsafeCell<bool>, // should be Cell
-
-        // These shouldn't be copied around.
-        pub marker: marker::NoCopy,
     }
+
+    unsafe impl<T> ::marker::Sync for Key<T> { }
 
     #[doc(hidden)]
     impl<T> Key<T> {
@@ -328,7 +408,7 @@ mod imp {
         // flagged for destruction.
         static DTORS: os::StaticKey = os::StaticKey {
             inner: os::INIT_INNER,
-            dtor: Some(run_dtors),
+            dtor: Some(run_dtors as unsafe extern "C" fn(*mut u8)),
         };
         type List = Vec<(*mut u8, unsafe extern fn(*mut u8))>;
         if DTORS.get().is_null() {
@@ -373,9 +453,9 @@ mod imp {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(any(not(any(target_os = "macos", target_os = "linux")), target_arch = "aarch64"))]
 mod imp {
-    use prelude::*;
+    use prelude::v1::*;
 
     use cell::UnsafeCell;
     use mem;
@@ -390,6 +470,8 @@ mod imp {
         // OS-TLS key that we'll use to key off.
         pub os: OsStaticKey,
     }
+
+    unsafe impl<T> ::marker::Sync for Key<T> { }
 
     struct Value<T: 'static> {
         key: &'static Key<T>,
@@ -446,36 +528,38 @@ mod imp {
 
 #[cfg(test)]
 mod tests {
-    use prelude::*;
+    use prelude::v1::*;
 
+    use sync::mpsc::{channel, Sender};
     use cell::UnsafeCell;
-    use rustrt::thread::Thread;
+    use super::State;
+    use thread::Thread;
 
     struct Foo(Sender<()>);
 
     impl Drop for Foo {
         fn drop(&mut self) {
             let Foo(ref s) = *self;
-            s.send(());
+            s.send(()).unwrap();
         }
     }
 
     #[test]
     fn smoke_no_dtor() {
-        thread_local!(static FOO: UnsafeCell<int> = UnsafeCell { value: 1 })
+        thread_local!(static FOO: UnsafeCell<int> = UnsafeCell { value: 1 });
 
         FOO.with(|f| unsafe {
             assert_eq!(*f.get(), 1);
             *f.get() = 2;
         });
         let (tx, rx) = channel();
-        spawn(proc() {
+        let _t = Thread::spawn(move|| {
             FOO.with(|f| unsafe {
                 assert_eq!(*f.get(), 1);
             });
-            tx.send(());
+            tx.send(()).unwrap();
         });
-        rx.recv();
+        rx.recv().unwrap();
 
         FOO.with(|f| unsafe {
             assert_eq!(*f.get(), 2);
@@ -483,19 +567,42 @@ mod tests {
     }
 
     #[test]
+    fn states() {
+        struct Foo;
+        impl Drop for Foo {
+            fn drop(&mut self) {
+                assert!(FOO.state() == State::Destroyed);
+            }
+        }
+        fn foo() -> Foo {
+            assert!(FOO.state() == State::Uninitialized);
+            Foo
+        }
+        thread_local!(static FOO: Foo = foo());
+
+        Thread::scoped(|| {
+            assert!(FOO.state() == State::Uninitialized);
+            FOO.with(|_| {
+                assert!(FOO.state() == State::Valid);
+            });
+            assert!(FOO.state() == State::Valid);
+        }).join().ok().unwrap();
+    }
+
+    #[test]
     fn smoke_dtor() {
         thread_local!(static FOO: UnsafeCell<Option<Foo>> = UnsafeCell {
             value: None
-        })
+        });
 
         let (tx, rx) = channel();
-        spawn(proc() unsafe {
+        let _t = Thread::spawn(move|| unsafe {
             let mut tx = Some(tx);
             FOO.with(|f| {
                 *f.get() = Some(Foo(tx.take().unwrap()));
             });
         });
-        rx.recv();
+        rx.recv().unwrap();
     }
 
     #[test]
@@ -504,17 +611,17 @@ mod tests {
         struct S2;
         thread_local!(static K1: UnsafeCell<Option<S1>> = UnsafeCell {
             value: None
-        })
+        });
         thread_local!(static K2: UnsafeCell<Option<S2>> = UnsafeCell {
             value: None
-        })
+        });
         static mut HITS: uint = 0;
 
         impl Drop for S1 {
             fn drop(&mut self) {
                 unsafe {
                     HITS += 1;
-                    if K2.destroyed() {
+                    if K2.state() == State::Destroyed {
                         assert_eq!(HITS, 3);
                     } else {
                         if HITS == 1 {
@@ -530,16 +637,16 @@ mod tests {
             fn drop(&mut self) {
                 unsafe {
                     HITS += 1;
-                    assert!(!K1.destroyed());
+                    assert!(K1.state() != State::Destroyed);
                     assert_eq!(HITS, 2);
                     K1.with(|s| *s.get() = Some(S1));
                 }
             }
         }
 
-        Thread::start(proc() {
+        Thread::scoped(move|| {
             drop(S1);
-        }).join();
+        }).join().ok().unwrap();
     }
 
     #[test]
@@ -547,17 +654,17 @@ mod tests {
         struct S1;
         thread_local!(static K1: UnsafeCell<Option<S1>> = UnsafeCell {
             value: None
-        })
+        });
 
         impl Drop for S1 {
             fn drop(&mut self) {
-                assert!(K1.destroyed());
+                assert!(K1.state() == State::Destroyed);
             }
         }
 
-        Thread::start(proc() unsafe {
+        Thread::scoped(move|| unsafe {
             K1.with(|s| *s.get() = Some(S1));
-        }).join();
+        }).join().ok().unwrap();
     }
 
     #[test]
@@ -565,16 +672,16 @@ mod tests {
         struct S1(Sender<()>);
         thread_local!(static K1: UnsafeCell<Option<S1>> = UnsafeCell {
             value: None
-        })
+        });
         thread_local!(static K2: UnsafeCell<Option<Foo>> = UnsafeCell {
             value: None
-        })
+        });
 
         impl Drop for S1 {
             fn drop(&mut self) {
                 let S1(ref tx) = *self;
                 unsafe {
-                    if !K2.destroyed() {
+                    if K2.state() != State::Destroyed {
                         K2.with(|s| *s.get() = Some(Foo(tx.clone())));
                     }
                 }
@@ -582,17 +689,17 @@ mod tests {
         }
 
         let (tx, rx) = channel();
-        spawn(proc() unsafe {
+        let _t = Thread::spawn(move|| unsafe {
             let mut tx = Some(tx);
             K1.with(|s| *s.get() = Some(S1(tx.take().unwrap())));
         });
-        rx.recv();
+        rx.recv().unwrap();
     }
 }
 
 #[cfg(test)]
 mod dynamic_tests {
-    use prelude::*;
+    use prelude::v1::*;
 
     use cell::RefCell;
     use collections::HashMap;
@@ -600,7 +707,7 @@ mod dynamic_tests {
     #[test]
     fn smoke() {
         fn square(i: int) -> int { i * i }
-        thread_local!(static FOO: int = square(3))
+        thread_local!(static FOO: int = square(3));
 
         FOO.with(|f| {
             assert_eq!(*f, 9);
@@ -614,7 +721,7 @@ mod dynamic_tests {
             m.insert(1, 2);
             RefCell::new(m)
         }
-        thread_local!(static FOO: RefCell<HashMap<int, int>> = map())
+        thread_local!(static FOO: RefCell<HashMap<int, int>> = map());
 
         FOO.with(|map| {
             assert_eq!(map.borrow()[1], 2);
@@ -623,7 +730,7 @@ mod dynamic_tests {
 
     #[test]
     fn refcell_vec() {
-        thread_local!(static FOO: RefCell<Vec<uint>> = RefCell::new(vec![1, 2, 3]))
+        thread_local!(static FOO: RefCell<Vec<uint>> = RefCell::new(vec![1, 2, 3]));
 
         FOO.with(|vec| {
             assert_eq!(vec.borrow().len(), 3);

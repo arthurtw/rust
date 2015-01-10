@@ -36,6 +36,7 @@ use syntax::visit::Visitor;
 use syntax::visit;
 
 use std::iter::Enumerate;
+use std::num::FromPrimitive;
 use std::slice;
 
 // The actual lang items defined come at the end of this file in one handy table.
@@ -45,12 +46,10 @@ macro_rules! lets_do_this {
         $( $variant:ident, $name:expr, $method:ident; )*
     ) => {
 
-#[deriving(FromPrimitive, PartialEq, Eq, Hash)]
+#[derive(Copy, FromPrimitive, PartialEq, Eq, Hash)]
 pub enum LangItem {
     $($variant),*
 }
-
-impl Copy for LangItem {}
 
 pub struct LanguageItems {
     pub items: Vec<Option<ast::DefId>>,
@@ -67,7 +66,7 @@ impl LanguageItems {
         }
     }
 
-    pub fn items<'a>(&'a self) -> Enumerate<slice::Items<'a, Option<ast::DefId>>> {
+    pub fn items<'a>(&'a self) -> Enumerate<slice::Iter<'a, Option<ast::DefId>>> {
         self.items.iter().enumerate()
     }
 
@@ -112,6 +111,22 @@ impl LanguageItems {
         } else {
             None
         }
+    }
+
+    pub fn fn_trait_kind(&self, id: ast::DefId) -> Option<ty::UnboxedClosureKind> {
+        let def_id_kinds = [
+            (self.fn_trait(), ty::FnUnboxedClosureKind),
+            (self.fn_mut_trait(), ty::FnMutUnboxedClosureKind),
+            (self.fn_once_trait(), ty::FnOnceUnboxedClosureKind),
+            ];
+
+        for &(opt_def_id, kind) in def_id_kinds.iter() {
+            if Some(id) == opt_def_id {
+                return Some(kind);
+            }
+        }
+
+        None
     }
 
     $(
@@ -251,8 +266,10 @@ lets_do_this! {
     ShrTraitLangItem,                "shr",                     shr_trait;
     IndexTraitLangItem,              "index",                   index_trait;
     IndexMutTraitLangItem,           "index_mut",               index_mut_trait;
-    SliceTraitLangItem,              "slice",                   slice_trait;
-    SliceMutTraitLangItem,           "slice_mut",               slice_mut_trait;
+    RangeStructLangItem,             "range",                   range_struct;
+    RangeFromStructLangItem,         "range_from",              range_from_struct;
+    RangeToStructLangItem,           "range_to",                range_to_struct;
+    FullRangeStructLangItem,         "full_range",              full_range_struct;
 
     UnsafeTypeLangItem,              "unsafe",                  unsafe_type;
 
@@ -309,6 +326,8 @@ lets_do_this! {
     NoCopyItem,                      "no_copy_bound",           no_copy_bound;
     NoSyncItem,                      "no_sync_bound",           no_sync_bound;
     ManagedItem,                     "managed_bound",           managed_bound;
+
+    NonZeroItem,                     "non_zero",                non_zero;
 
     IteratorItem,                    "iterator",                iterator;
 

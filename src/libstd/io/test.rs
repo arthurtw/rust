@@ -10,35 +10,47 @@
 
 //! Various utility functions useful for writing I/O tests
 
-#![macro_escape]
+use prelude::v1::*;
 
 use libc;
 use os;
-use prelude::*;
 use std::io::net::ip::*;
-use sync::atomic::{AtomicUint, INIT_ATOMIC_UINT, Relaxed};
+use sync::atomic::{AtomicUint, ATOMIC_UINT_INIT, Ordering};
 
 /// Get a port number, starting at 9600, for use in tests
 pub fn next_test_port() -> u16 {
-    static NEXT_OFFSET: AtomicUint = INIT_ATOMIC_UINT;
-    base_port() + NEXT_OFFSET.fetch_add(1, Relaxed) as u16
+    static NEXT_OFFSET: AtomicUint = ATOMIC_UINT_INIT;
+    base_port() + NEXT_OFFSET.fetch_add(1, Ordering::Relaxed) as u16
 }
 
-/// Get a temporary path which could be the location of a unix socket
-pub fn next_test_unix() -> Path {
-    static COUNT: AtomicUint = INIT_ATOMIC_UINT;
+// iOS has a pretty long tmpdir path which causes pipe creation
+// to like: invalid argument: path must be smaller than SUN_LEN
+fn next_test_unix_socket() -> String {
+    static COUNT: AtomicUint = ATOMIC_UINT_INIT;
     // base port and pid are an attempt to be unique between multiple
     // test-runners of different configurations running on one
     // buildbot, the count is to be unique within this executable.
-    let string = format!("rust-test-unix-path-{}-{}-{}",
-                         base_port(),
-                         unsafe {libc::getpid()},
-                         COUNT.fetch_add(1, Relaxed));
+    format!("rust-test-unix-path-{}-{}-{}",
+            base_port(),
+            unsafe {libc::getpid()},
+            COUNT.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Get a temporary path which could be the location of a unix socket
+#[cfg(not(target_os = "ios"))]
+pub fn next_test_unix() -> Path {
+    let string = next_test_unix_socket();
     if cfg!(unix) {
         os::tmpdir().join(string)
     } else {
         Path::new(format!("{}{}", r"\\.\pipe\", string))
     }
+}
+
+/// Get a temporary path which could be the location of a unix socket
+#[cfg(target_os = "ios")]
+pub fn next_test_unix() -> Path {
+    Path::new(format!("/var/tmp/{}", next_test_unix_socket()))
 }
 
 /// Get a unique IPv4 localhost:port pair starting at 9600
@@ -100,7 +112,7 @@ pub fn raise_fd_limit() {
 /// multithreaded scheduler testing, depending on the number of cores available.
 ///
 /// This fixes issue #7772.
-#[cfg(target_os="macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(non_camel_case_types)]
 mod darwin_fd_limit {
     use libc;
@@ -130,7 +142,7 @@ mod darwin_fd_limit {
         use os::last_os_error;
 
         // Fetch the kern.maxfilesperproc value
-        let mut mib: [libc::c_int, ..2] = [CTL_KERN, KERN_MAXFILESPERPROC];
+        let mut mib: [libc::c_int; 2] = [CTL_KERN, KERN_MAXFILESPERPROC];
         let mut maxfiles: libc::c_int = 0;
         let mut size: libc::size_t = size_of_val(&maxfiles) as libc::size_t;
         if sysctl(&mut mib[0], 2, &mut maxfiles as *mut libc::c_int as *mut libc::c_void, &mut size,
@@ -157,7 +169,7 @@ mod darwin_fd_limit {
     }
 }
 
-#[cfg(not(target_os="macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 mod darwin_fd_limit {
     pub unsafe fn raise_fd_limit() {}
 }

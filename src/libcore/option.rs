@@ -66,10 +66,11 @@
 //! not (`None`).
 //!
 //! ```
+//! # use std::boxed::Box;
 //! let optional: Option<Box<int>> = None;
 //! check_optional(&optional);
 //!
-//! let optional: Option<Box<int>> = Some(box 9000);
+//! let optional: Option<Box<int>> = Some(Box::new(9000));
 //! check_optional(&optional);
 //!
 //! fn check_optional(optional: &Option<Box<int>>) {
@@ -143,23 +144,19 @@
 
 #![stable]
 
-#[cfg(stage0)]
-pub use self::Option::*;
-#[cfg(not(stage0))]
 use self::Option::*;
 
+use clone::Clone;
 use cmp::{Eq, Ord};
 use default::Default;
-use iter::{Iterator, IteratorExt, DoubleEndedIterator, FromIterator};
 use iter::{ExactSizeIterator};
-use kinds::Copy;
+use iter::{Iterator, IteratorExt, DoubleEndedIterator, FromIterator};
 use mem;
-use result::Result;
+use ops::{Deref, FnOnce};
 use result::Result::{Ok, Err};
-use slice;
+use result::Result;
 use slice::AsSlice;
-use clone::Clone;
-use ops::Deref;
+use slice;
 
 // Note that this is not a lang item per se, but it has a hidden dependency on
 // `Iterator`, which is one. The compiler assumes that the `next` method of
@@ -167,12 +164,14 @@ use ops::Deref;
 // which basically means it must be `Option`.
 
 /// The `Option` type.
-#[deriving(Clone, PartialEq, PartialOrd, Eq, Ord, Show)]
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Show, Hash)]
 #[stable]
 pub enum Option<T> {
     /// No value
+    #[stable]
     None,
     /// Some value `T`
+    #[stable]
     Some(T)
 }
 
@@ -240,7 +239,7 @@ impl<T> Option<T> {
     /// // First, cast `Option<String>` to `Option<&String>` with `as_ref`,
     /// // then consume *that* with `map`, leaving `num_as_str` on the stack.
     /// let num_as_int: Option<uint> = num_as_str.as_ref().map(|n| n.len());
-    /// println!("still can print num_as_str: {}", num_as_str);
+    /// println!("still can print num_as_str: {:?}", num_as_str);
     /// ```
     #[inline]
     #[stable]
@@ -264,7 +263,7 @@ impl<T> Option<T> {
     /// assert_eq!(x, Some(42u));
     /// ```
     #[inline]
-    #[unstable = "waiting for mut conventions"]
+    #[stable]
     pub fn as_mut<'r>(&'r mut self) -> Option<&'r mut T> {
         match *self {
             Some(ref mut x) => Some(x),
@@ -324,7 +323,7 @@ impl<T> Option<T> {
     /// x.expect("the world is ending"); // panics with `world is ending`
     /// ```
     #[inline]
-    #[unstable = "waiting for conventions"]
+    #[stable]
     pub fn expect(self, msg: &str) -> T {
         match self {
             Some(val) => val,
@@ -356,7 +355,7 @@ impl<T> Option<T> {
     /// assert_eq!(x.unwrap(), "air"); // fails
     /// ```
     #[inline]
-    #[unstable = "waiting for conventions"]
+    #[stable]
     pub fn unwrap(self) -> T {
         match self {
             Some(val) => val,
@@ -373,7 +372,7 @@ impl<T> Option<T> {
     /// assert_eq!(None.unwrap_or("bike"), "bike");
     /// ```
     #[inline]
-    #[unstable = "waiting for conventions"]
+    #[stable]
     pub fn unwrap_or(self, def: T) -> T {
         match self {
             Some(x) => x,
@@ -391,8 +390,8 @@ impl<T> Option<T> {
     /// assert_eq!(None.unwrap_or_else(|| 2 * k), 20u);
     /// ```
     #[inline]
-    #[unstable = "waiting for conventions"]
-    pub fn unwrap_or_else(self, f: || -> T) -> T {
+    #[stable]
+    pub fn unwrap_or_else<F: FnOnce() -> T>(self, f: F) -> T {
         match self {
             Some(x) => x,
             None => f()
@@ -415,8 +414,8 @@ impl<T> Option<T> {
     /// let num_as_int: Option<uint> = num_as_str.map(|n| n.len());
     /// ```
     #[inline]
-    #[unstable = "waiting for unboxed closures"]
-    pub fn map<U>(self, f: |T| -> U) -> Option<U> {
+    #[stable]
+    pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Option<U> {
         match self {
             Some(x) => Some(f(x)),
             None => None
@@ -435,8 +434,8 @@ impl<T> Option<T> {
     /// assert_eq!(x.map_or(42u, |v| v.len()), 42u);
     /// ```
     #[inline]
-    #[unstable = "waiting for unboxed closures"]
-    pub fn map_or<U>(self, def: U, f: |T| -> U) -> U {
+    #[stable]
+    pub fn map_or<U, F: FnOnce(T) -> U>(self, def: U, f: F) -> U {
         match self {
             Some(t) => f(t),
             None => def
@@ -457,8 +456,8 @@ impl<T> Option<T> {
     /// assert_eq!(x.map_or_else(|| 2 * k, |v| v.len()), 42u);
     /// ```
     #[inline]
-    #[unstable = "waiting for unboxed closures"]
-    pub fn map_or_else<U>(self, def: || -> U, f: |T| -> U) -> U {
+    #[stable]
+    pub fn map_or_else<U, D: FnOnce() -> U, F: FnOnce(T) -> U>(self, def: D, f: F) -> U {
         match self {
             Some(t) => f(t),
             None => def()
@@ -478,7 +477,7 @@ impl<T> Option<T> {
     /// assert_eq!(x.ok_or(0i), Err(0i));
     /// ```
     #[inline]
-    #[experimental]
+    #[unstable]
     pub fn ok_or<E>(self, err: E) -> Result<T, E> {
         match self {
             Some(v) => Ok(v),
@@ -499,8 +498,8 @@ impl<T> Option<T> {
     /// assert_eq!(x.ok_or_else(|| 0i), Err(0i));
     /// ```
     #[inline]
-    #[experimental]
-    pub fn ok_or_else<E>(self, err: || -> E) -> Result<T, E> {
+    #[unstable]
+    pub fn ok_or_else<E, F: FnOnce() -> E>(self, err: F) -> Result<T, E> {
         match self {
             Some(v) => Ok(v),
             None => Err(err()),
@@ -523,9 +522,9 @@ impl<T> Option<T> {
     /// assert_eq!(x.iter().next(), None);
     /// ```
     #[inline]
-    #[unstable = "waiting for iterator conventions"]
-    pub fn iter<'r>(&'r self) -> Item<&'r T> {
-        Item{opt: self.as_ref()}
+    #[stable]
+    pub fn iter(&self) -> Iter<T> {
+        Iter { inner: Item { opt: self.as_ref() } }
     }
 
     /// Returns a mutable iterator over the possibly contained value.
@@ -535,7 +534,7 @@ impl<T> Option<T> {
     /// ```
     /// let mut x = Some(4u);
     /// match x.iter_mut().next() {
-    ///     Some(&ref mut v) => *v = 42u,
+    ///     Some(&mut ref mut v) => *v = 42u,
     ///     None => {},
     /// }
     /// assert_eq!(x, Some(42));
@@ -545,8 +544,8 @@ impl<T> Option<T> {
     /// ```
     #[inline]
     #[unstable = "waiting for iterator conventions"]
-    pub fn iter_mut<'r>(&'r mut self) -> Item<&'r mut T> {
-        Item{opt: self.as_mut()}
+    pub fn iter_mut(&mut self) -> IterMut<T> {
+        IterMut { inner: Item { opt: self.as_mut() } }
     }
 
     /// Returns a consuming iterator over the possibly contained value.
@@ -563,9 +562,9 @@ impl<T> Option<T> {
     /// assert!(v.is_empty());
     /// ```
     #[inline]
-    #[unstable = "waiting for iterator conventions"]
-    pub fn into_iter(self) -> Item<T> {
-        Item{opt: self}
+    #[stable]
+    pub fn into_iter(self) -> IntoIter<T> {
+        IntoIter { inner: Item { opt: self } }
     }
 
     /////////////////////////////////////////////////////////////////////////
@@ -617,8 +616,8 @@ impl<T> Option<T> {
     /// assert_eq!(None.and_then(sq).and_then(sq), None);
     /// ```
     #[inline]
-    #[unstable = "waiting for unboxed closures"]
-    pub fn and_then<U>(self, f: |T| -> Option<U>) -> Option<U> {
+    #[stable]
+    pub fn and_then<U, F: FnOnce(T) -> Option<U>>(self, f: F) -> Option<U> {
         match self {
             Some(x) => f(x),
             None => None,
@@ -669,8 +668,8 @@ impl<T> Option<T> {
     /// assert_eq!(None.or_else(nobody), None);
     /// ```
     #[inline]
-    #[unstable = "waiting for unboxed closures"]
-    pub fn or_else(self, f: || -> Option<T>) -> Option<T> {
+    #[stable]
+    pub fn or_else<F: FnOnce() -> Option<T>>(self, f: F) -> Option<T> {
         match self {
             Some(_) => self,
             None => f()
@@ -701,7 +700,7 @@ impl<T> Option<T> {
     }
 }
 
-impl<'a, T: Clone, D: Deref<T>> Option<D> {
+impl<'a, T: Clone, D: Deref<Target=T>> Option<D> {
     /// Maps an Option<D> to an Option<T> by dereffing and cloning the contents of the Option.
     /// Useful for converting an Option<&T> to an Option<T>.
     #[unstable = "recently added as part of collections reform"]
@@ -720,21 +719,21 @@ impl<T: Default> Option<T> {
     /// # Example
     ///
     /// Convert a string to an integer, turning poorly-formed strings
-    /// into 0 (the default value for integers). `from_str` converts
+    /// into 0 (the default value for integers). `parse` converts
     /// a string to any other type that implements `FromStr`, returning
     /// `None` on error.
     ///
     /// ```
     /// let good_year_from_input = "1909";
     /// let bad_year_from_input = "190blarg";
-    /// let good_year = from_str(good_year_from_input).unwrap_or_default();
-    /// let bad_year = from_str(bad_year_from_input).unwrap_or_default();
+    /// let good_year = good_year_from_input.parse().unwrap_or_default();
+    /// let bad_year = bad_year_from_input.parse().unwrap_or_default();
     ///
     /// assert_eq!(1909i, good_year);
     /// assert_eq!(0i, bad_year);
     /// ```
     #[inline]
-    #[unstable = "waiting for conventions"]
+    #[stable]
     pub fn unwrap_or_default(self) -> T {
         match self {
             Some(x) => x,
@@ -747,6 +746,7 @@ impl<T: Default> Option<T> {
 // Trait implementations
 /////////////////////////////////////////////////////////////////////////////
 
+#[unstable = "waiting on the stability of the trait itself"]
 impl<T> AsSlice<T> for Option<T> {
     /// Convert from `Option<T>` to `&[T]` (without copying)
     #[inline]
@@ -764,24 +764,22 @@ impl<T> AsSlice<T> for Option<T> {
 #[stable]
 impl<T> Default for Option<T> {
     #[inline]
+    #[stable]
     fn default() -> Option<T> { None }
 }
 
 /////////////////////////////////////////////////////////////////////////////
-// The Option Iterator
+// The Option Iterators
 /////////////////////////////////////////////////////////////////////////////
 
-/// An `Option` iterator that yields either one or zero elements
-///
-/// The `Item` iterator is returned by the `iter`, `iter_mut` and `into_iter`
-/// methods on `Option`.
-#[deriving(Clone)]
-#[unstable = "waiting for iterator conventions"]
-pub struct Item<A> {
+#[derive(Clone)]
+struct Item<A> {
     opt: Option<A>
 }
 
-impl<A> Iterator<A> for Item<A> {
+impl<A> Iterator for Item<A> {
+    type Item = A;
+
     #[inline]
     fn next(&mut self) -> Option<A> {
         self.opt.take()
@@ -796,14 +794,90 @@ impl<A> Iterator<A> for Item<A> {
     }
 }
 
-impl<A> DoubleEndedIterator<A> for Item<A> {
+impl<A> DoubleEndedIterator for Item<A> {
     #[inline]
     fn next_back(&mut self) -> Option<A> {
         self.opt.take()
     }
 }
 
-impl<A> ExactSizeIterator<A> for Item<A> {}
+impl<A> ExactSizeIterator for Item<A> {}
+
+/// An iterator over a reference of the contained item in an Option.
+#[stable]
+pub struct Iter<'a, A: 'a> { inner: Item<&'a A> }
+
+#[stable]
+impl<'a, A> Iterator for Iter<'a, A> {
+    type Item = &'a A;
+
+    #[inline]
+    fn next(&mut self) -> Option<&'a A> { self.inner.next() }
+    #[inline]
+    fn size_hint(&self) -> (uint, Option<uint>) { self.inner.size_hint() }
+}
+
+#[stable]
+impl<'a, A> DoubleEndedIterator for Iter<'a, A> {
+    #[inline]
+    fn next_back(&mut self) -> Option<&'a A> { self.inner.next_back() }
+}
+
+#[stable]
+impl<'a, A> ExactSizeIterator for Iter<'a, A> {}
+
+#[stable]
+impl<'a, A> Clone for Iter<'a, A> {
+    fn clone(&self) -> Iter<'a, A> {
+        Iter { inner: self.inner.clone() }
+    }
+}
+
+/// An iterator over a mutable reference of the contained item in an Option.
+#[stable]
+pub struct IterMut<'a, A: 'a> { inner: Item<&'a mut A> }
+
+#[stable]
+impl<'a, A> Iterator for IterMut<'a, A> {
+    type Item = &'a mut A;
+
+    #[inline]
+    fn next(&mut self) -> Option<&'a mut A> { self.inner.next() }
+    #[inline]
+    fn size_hint(&self) -> (uint, Option<uint>) { self.inner.size_hint() }
+}
+
+#[stable]
+impl<'a, A> DoubleEndedIterator for IterMut<'a, A> {
+    #[inline]
+    fn next_back(&mut self) -> Option<&'a mut A> { self.inner.next_back() }
+}
+
+#[stable]
+impl<'a, A> ExactSizeIterator for IterMut<'a, A> {}
+
+/// An iterator over the item contained inside an Option.
+#[stable]
+pub struct IntoIter<A> { inner: Item<A> }
+
+#[stable]
+impl<A> Iterator for IntoIter<A> {
+    type Item = A;
+
+    #[inline]
+    fn next(&mut self) -> Option<A> { self.inner.next() }
+    #[inline]
+    fn size_hint(&self) -> (uint, Option<uint>) { self.inner.size_hint() }
+}
+
+#[stable]
+impl<A> DoubleEndedIterator for IntoIter<A> {
+    #[inline]
+    fn next_back(&mut self) -> Option<A> { self.inner.next_back() }
+}
+
+#[stable]
+impl<A> ExactSizeIterator for IntoIter<A> {}
 
 /////////////////////////////////////////////////////////////////////////////
 // FromIterator
@@ -829,7 +903,8 @@ impl<A, V: FromIterator<A>> FromIterator<Option<A>> for Option<V> {
     /// assert!(res == Some(vec!(2u, 3u)));
     /// ```
     #[inline]
-    fn from_iter<I: Iterator<Option<A>>>(iter: I) -> Option<V> {
+    #[stable]
+    fn from_iter<I: Iterator<Item=Option<A>>>(iter: I) -> Option<V> {
         // FIXME(#11084): This could be replaced with Iterator::scan when this
         // performance bug is closed.
 
@@ -838,7 +913,9 @@ impl<A, V: FromIterator<A>> FromIterator<Option<A>> for Option<V> {
             found_none: bool,
         }
 
-        impl<T, Iter: Iterator<Option<T>>> Iterator<T> for Adapter<Iter> {
+        impl<T, Iter: Iterator<Item=Option<T>>> Iterator for Adapter<Iter> {
+            type Item = T;
+
             #[inline]
             fn next(&mut self) -> Option<T> {
                 match self.iter.next() {
@@ -862,6 +939,3 @@ impl<A, V: FromIterator<A>> FromIterator<Option<A>> for Option<V> {
         }
     }
 }
-
-impl<T:Copy> Copy for Option<T> {}
-

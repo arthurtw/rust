@@ -8,44 +8,106 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Core atomic primitives
+//! Atomic types
+//!
+//! Atomic types provide primitive shared-memory communication between
+//! threads, and are the building blocks of other concurrent
+//! types.
+//!
+//! This module defines atomic versions of a select number of primitive
+//! types, including `AtomicBool`, `AtomicInt`, `AtomicUint`, and `AtomicOption`.
+//! Atomic types present operations that, when used correctly, synchronize
+//! updates between threads.
+//!
+//! Each method takes an `Ordering` which represents the strength of
+//! the memory barrier for that operation. These orderings are the
+//! same as [C++11 atomic orderings][1].
+//!
+//! [1]: http://gcc.gnu.org/wiki/Atomic/GCCMM/AtomicSync
+//!
+//! Atomic variables are safe to share between threads (they implement `Sync`)
+//! but they do not themselves provide the mechanism for sharing. The most
+//! common way to share an atomic variable is to put it into an `Arc` (an
+//! atomically-reference-counted shared pointer).
+//!
+//! Most atomic types may be stored in static variables, initialized using
+//! the provided static initializers like `INIT_ATOMIC_BOOL`. Atomic statics
+//! are often used for lazy global initialization.
+//!
+//!
+//! # Examples
+//!
+//! A simple spinlock:
+//!
+//! ```
+//! use std::sync::Arc;
+//! use std::sync::atomic::{AtomicUint, Ordering};
+//! use std::thread::Thread;
+//!
+//! fn main() {
+//!     let spinlock = Arc::new(AtomicUint::new(1));
+//!
+//!     let spinlock_clone = spinlock.clone();
+//!     Thread::spawn(move|| {
+//!         spinlock_clone.store(0, Ordering::SeqCst);
+//!     });
+//!
+//!     // Wait for the other task to release the lock
+//!     while spinlock.load(Ordering::SeqCst) != 0 {}
+//! }
+//! ```
+//!
+//! Keep a global count of live tasks:
+//!
+//! ```
+//! use std::sync::atomic::{AtomicUint, Ordering, ATOMIC_UINT_INIT};
+//!
+//! static GLOBAL_TASK_COUNT: AtomicUint = ATOMIC_UINT_INIT;
+//!
+//! let old_task_count = GLOBAL_TASK_COUNT.fetch_add(1, Ordering::SeqCst);
+//! println!("live tasks: {}", old_task_count + 1);
+//! ```
 
 #![stable]
 
-pub use self::Ordering::*;
+use self::Ordering::*;
+
+use marker::Sync;
 
 use intrinsics;
-use std::kinds::marker;
 use cell::UnsafeCell;
-use kinds::Copy;
 
 /// A boolean type which can be safely shared between threads.
 #[stable]
 pub struct AtomicBool {
     v: UnsafeCell<uint>,
-    nocopy: marker::NoCopy
 }
+
+unsafe impl Sync for AtomicBool {}
 
 /// A signed integer type which can be safely shared between threads.
-#[stable]
+#[unstable = "awaiting int/uint conventions, may be renamed"]
 pub struct AtomicInt {
     v: UnsafeCell<int>,
-    nocopy: marker::NoCopy
 }
 
+unsafe impl Sync for AtomicInt {}
+
 /// An unsigned integer type which can be safely shared between threads.
-#[stable]
+#[unstable = "awaiting int/uint conventions, may be renamed"]
 pub struct AtomicUint {
     v: UnsafeCell<uint>,
-    nocopy: marker::NoCopy
 }
+
+unsafe impl Sync for AtomicUint {}
 
 /// A raw pointer type which can be safely shared between threads.
 #[stable]
 pub struct AtomicPtr<T> {
     p: UnsafeCell<uint>,
-    nocopy: marker::NoCopy
 }
+
+unsafe impl<T> Sync for AtomicPtr<T> {}
 
 /// Atomic memory orderings
 ///
@@ -58,6 +120,7 @@ pub struct AtomicPtr<T> {
 /// Rust's memory orderings are [the same as
 /// C++'s](http://gcc.gnu.org/wiki/Atomic/GCCMM/AtomicSync).
 #[stable]
+#[derive(Copy)]
 pub enum Ordering {
     /// No ordering constraints, only atomic operations.
     #[stable]
@@ -82,20 +145,18 @@ pub enum Ordering {
     SeqCst,
 }
 
-impl Copy for Ordering {}
-
 /// An `AtomicBool` initialized to `false`.
-#[unstable = "may be renamed, pending conventions for static initalizers"]
-pub const INIT_ATOMIC_BOOL: AtomicBool =
-        AtomicBool { v: UnsafeCell { value: 0 }, nocopy: marker::NoCopy };
+#[stable]
+pub const ATOMIC_BOOL_INIT: AtomicBool =
+        AtomicBool { v: UnsafeCell { value: 0 } };
 /// An `AtomicInt` initialized to `0`.
-#[unstable = "may be renamed, pending conventions for static initalizers"]
-pub const INIT_ATOMIC_INT: AtomicInt =
-        AtomicInt { v: UnsafeCell { value: 0 }, nocopy: marker::NoCopy };
+#[unstable = "awaiting int/uint conventions, may be renamed"]
+pub const ATOMIC_INT_INIT: AtomicInt =
+        AtomicInt { v: UnsafeCell { value: 0 } };
 /// An `AtomicUint` initialized to `0`.
-#[unstable = "may be renamed, pending conventions for static initalizers"]
-pub const INIT_ATOMIC_UINT: AtomicUint =
-        AtomicUint { v: UnsafeCell { value: 0, }, nocopy: marker::NoCopy };
+#[unstable = "awaiting int/uint conventions, may be renamed"]
+pub const ATOMIC_UINT_INIT: AtomicUint =
+        AtomicUint { v: UnsafeCell { value: 0, } };
 
 // NB: Needs to be -1 (0b11111111...) to make fetch_nand work correctly
 const UINT_TRUE: uint = -1;
@@ -115,7 +176,7 @@ impl AtomicBool {
     #[stable]
     pub fn new(v: bool) -> AtomicBool {
         let val = if v { UINT_TRUE } else { 0 };
-        AtomicBool { v: UnsafeCell::new(val), nocopy: marker::NoCopy }
+        AtomicBool { v: UnsafeCell::new(val) }
     }
 
     /// Loads a value from the bool.
@@ -222,19 +283,19 @@ impl AtomicBool {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::atomic::{AtomicBool, SeqCst};
+    /// use std::sync::atomic::{AtomicBool, Ordering};
     ///
     /// let foo = AtomicBool::new(true);
-    /// assert_eq!(true, foo.fetch_and(false, SeqCst));
-    /// assert_eq!(false, foo.load(SeqCst));
+    /// assert_eq!(true, foo.fetch_and(false, Ordering::SeqCst));
+    /// assert_eq!(false, foo.load(Ordering::SeqCst));
     ///
     /// let foo = AtomicBool::new(true);
-    /// assert_eq!(true, foo.fetch_and(true, SeqCst));
-    /// assert_eq!(true, foo.load(SeqCst));
+    /// assert_eq!(true, foo.fetch_and(true, Ordering::SeqCst));
+    /// assert_eq!(true, foo.load(Ordering::SeqCst));
     ///
     /// let foo = AtomicBool::new(false);
-    /// assert_eq!(false, foo.fetch_and(false, SeqCst));
-    /// assert_eq!(false, foo.load(SeqCst));
+    /// assert_eq!(false, foo.fetch_and(false, Ordering::SeqCst));
+    /// assert_eq!(false, foo.load(Ordering::SeqCst));
     /// ```
     #[inline]
     #[stable]
@@ -254,20 +315,20 @@ impl AtomicBool {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::atomic::{AtomicBool, SeqCst};
+    /// use std::sync::atomic::{AtomicBool, Ordering};
     ///
     /// let foo = AtomicBool::new(true);
-    /// assert_eq!(true, foo.fetch_nand(false, SeqCst));
-    /// assert_eq!(true, foo.load(SeqCst));
+    /// assert_eq!(true, foo.fetch_nand(false, Ordering::SeqCst));
+    /// assert_eq!(true, foo.load(Ordering::SeqCst));
     ///
     /// let foo = AtomicBool::new(true);
-    /// assert_eq!(true, foo.fetch_nand(true, SeqCst));
-    /// assert_eq!(0, foo.load(SeqCst) as int);
-    /// assert_eq!(false, foo.load(SeqCst));
+    /// assert_eq!(true, foo.fetch_nand(true, Ordering::SeqCst));
+    /// assert_eq!(0, foo.load(Ordering::SeqCst) as int);
+    /// assert_eq!(false, foo.load(Ordering::SeqCst));
     ///
     /// let foo = AtomicBool::new(false);
-    /// assert_eq!(false, foo.fetch_nand(false, SeqCst));
-    /// assert_eq!(true, foo.load(SeqCst));
+    /// assert_eq!(false, foo.fetch_nand(false, Ordering::SeqCst));
+    /// assert_eq!(true, foo.load(Ordering::SeqCst));
     /// ```
     #[inline]
     #[stable]
@@ -287,19 +348,19 @@ impl AtomicBool {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::atomic::{AtomicBool, SeqCst};
+    /// use std::sync::atomic::{AtomicBool, Ordering};
     ///
     /// let foo = AtomicBool::new(true);
-    /// assert_eq!(true, foo.fetch_or(false, SeqCst));
-    /// assert_eq!(true, foo.load(SeqCst));
+    /// assert_eq!(true, foo.fetch_or(false, Ordering::SeqCst));
+    /// assert_eq!(true, foo.load(Ordering::SeqCst));
     ///
     /// let foo = AtomicBool::new(true);
-    /// assert_eq!(true, foo.fetch_or(true, SeqCst));
-    /// assert_eq!(true, foo.load(SeqCst));
+    /// assert_eq!(true, foo.fetch_or(true, Ordering::SeqCst));
+    /// assert_eq!(true, foo.load(Ordering::SeqCst));
     ///
     /// let foo = AtomicBool::new(false);
-    /// assert_eq!(false, foo.fetch_or(false, SeqCst));
-    /// assert_eq!(false, foo.load(SeqCst));
+    /// assert_eq!(false, foo.fetch_or(false, Ordering::SeqCst));
+    /// assert_eq!(false, foo.load(Ordering::SeqCst));
     /// ```
     #[inline]
     #[stable]
@@ -319,19 +380,19 @@ impl AtomicBool {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::atomic::{AtomicBool, SeqCst};
+    /// use std::sync::atomic::{AtomicBool, Ordering};
     ///
     /// let foo = AtomicBool::new(true);
-    /// assert_eq!(true, foo.fetch_xor(false, SeqCst));
-    /// assert_eq!(true, foo.load(SeqCst));
+    /// assert_eq!(true, foo.fetch_xor(false, Ordering::SeqCst));
+    /// assert_eq!(true, foo.load(Ordering::SeqCst));
     ///
     /// let foo = AtomicBool::new(true);
-    /// assert_eq!(true, foo.fetch_xor(true, SeqCst));
-    /// assert_eq!(false, foo.load(SeqCst));
+    /// assert_eq!(true, foo.fetch_xor(true, Ordering::SeqCst));
+    /// assert_eq!(false, foo.load(Ordering::SeqCst));
     ///
     /// let foo = AtomicBool::new(false);
-    /// assert_eq!(false, foo.fetch_xor(false, SeqCst));
-    /// assert_eq!(false, foo.load(SeqCst));
+    /// assert_eq!(false, foo.fetch_xor(false, Ordering::SeqCst));
+    /// assert_eq!(false, foo.load(Ordering::SeqCst));
     /// ```
     #[inline]
     #[stable]
@@ -342,6 +403,7 @@ impl AtomicBool {
     }
 }
 
+#[unstable = "awaiting int/uint conventions, types may change"]
 impl AtomicInt {
     /// Creates a new `AtomicInt`.
     ///
@@ -353,9 +415,8 @@ impl AtomicInt {
     /// let atomic_forty_two  = AtomicInt::new(42);
     /// ```
     #[inline]
-    #[stable]
     pub fn new(v: int) -> AtomicInt {
-        AtomicInt {v: UnsafeCell::new(v), nocopy: marker::NoCopy}
+        AtomicInt {v: UnsafeCell::new(v)}
     }
 
     /// Loads a value from the int.
@@ -376,7 +437,6 @@ impl AtomicInt {
     /// let value = some_int.load(Ordering::Relaxed);
     /// ```
     #[inline]
-    #[stable]
     pub fn load(&self, order: Ordering) -> int {
         unsafe { atomic_load(self.v.get() as *const int, order) }
     }
@@ -399,7 +459,6 @@ impl AtomicInt {
     ///
     /// Panics if `order` is `Acquire` or `AcqRel`.
     #[inline]
-    #[stable]
     pub fn store(&self, val: int, order: Ordering) {
         unsafe { atomic_store(self.v.get(), val, order); }
     }
@@ -418,7 +477,6 @@ impl AtomicInt {
     /// let value = some_int.swap(10, Ordering::Relaxed);
     /// ```
     #[inline]
-    #[stable]
     pub fn swap(&self, val: int, order: Ordering) -> int {
         unsafe { atomic_swap(self.v.get(), val, order) }
     }
@@ -440,7 +498,6 @@ impl AtomicInt {
     /// let value = some_int.compare_and_swap(5, 10, Ordering::Relaxed);
     /// ```
     #[inline]
-    #[stable]
     pub fn compare_and_swap(&self, old: int, new: int, order: Ordering) -> int {
         unsafe { atomic_compare_and_swap(self.v.get(), old, new, order) }
     }
@@ -450,14 +507,13 @@ impl AtomicInt {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::atomic::{AtomicInt, SeqCst};
+    /// use std::sync::atomic::{AtomicInt, Ordering};
     ///
     /// let foo = AtomicInt::new(0);
-    /// assert_eq!(0, foo.fetch_add(10, SeqCst));
-    /// assert_eq!(10, foo.load(SeqCst));
+    /// assert_eq!(0, foo.fetch_add(10, Ordering::SeqCst));
+    /// assert_eq!(10, foo.load(Ordering::SeqCst));
     /// ```
     #[inline]
-    #[stable]
     pub fn fetch_add(&self, val: int, order: Ordering) -> int {
         unsafe { atomic_add(self.v.get(), val, order) }
     }
@@ -467,14 +523,13 @@ impl AtomicInt {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::atomic::{AtomicInt, SeqCst};
+    /// use std::sync::atomic::{AtomicInt, Ordering};
     ///
     /// let foo = AtomicInt::new(0);
-    /// assert_eq!(0, foo.fetch_sub(10, SeqCst));
-    /// assert_eq!(-10, foo.load(SeqCst));
+    /// assert_eq!(0, foo.fetch_sub(10, Ordering::SeqCst));
+    /// assert_eq!(-10, foo.load(Ordering::SeqCst));
     /// ```
     #[inline]
-    #[stable]
     pub fn fetch_sub(&self, val: int, order: Ordering) -> int {
         unsafe { atomic_sub(self.v.get(), val, order) }
     }
@@ -484,13 +539,12 @@ impl AtomicInt {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::atomic::{AtomicInt, SeqCst};
+    /// use std::sync::atomic::{AtomicInt, Ordering};
     ///
     /// let foo = AtomicInt::new(0b101101);
-    /// assert_eq!(0b101101, foo.fetch_and(0b110011, SeqCst));
-    /// assert_eq!(0b100001, foo.load(SeqCst));
+    /// assert_eq!(0b101101, foo.fetch_and(0b110011, Ordering::SeqCst));
+    /// assert_eq!(0b100001, foo.load(Ordering::SeqCst));
     #[inline]
-    #[stable]
     pub fn fetch_and(&self, val: int, order: Ordering) -> int {
         unsafe { atomic_and(self.v.get(), val, order) }
     }
@@ -500,13 +554,12 @@ impl AtomicInt {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::atomic::{AtomicInt, SeqCst};
+    /// use std::sync::atomic::{AtomicInt, Ordering};
     ///
     /// let foo = AtomicInt::new(0b101101);
-    /// assert_eq!(0b101101, foo.fetch_or(0b110011, SeqCst));
-    /// assert_eq!(0b111111, foo.load(SeqCst));
+    /// assert_eq!(0b101101, foo.fetch_or(0b110011, Ordering::SeqCst));
+    /// assert_eq!(0b111111, foo.load(Ordering::SeqCst));
     #[inline]
-    #[stable]
     pub fn fetch_or(&self, val: int, order: Ordering) -> int {
         unsafe { atomic_or(self.v.get(), val, order) }
     }
@@ -516,18 +569,18 @@ impl AtomicInt {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::atomic::{AtomicInt, SeqCst};
+    /// use std::sync::atomic::{AtomicInt, Ordering};
     ///
     /// let foo = AtomicInt::new(0b101101);
-    /// assert_eq!(0b101101, foo.fetch_xor(0b110011, SeqCst));
-    /// assert_eq!(0b011110, foo.load(SeqCst));
+    /// assert_eq!(0b101101, foo.fetch_xor(0b110011, Ordering::SeqCst));
+    /// assert_eq!(0b011110, foo.load(Ordering::SeqCst));
     #[inline]
-    #[stable]
     pub fn fetch_xor(&self, val: int, order: Ordering) -> int {
         unsafe { atomic_xor(self.v.get(), val, order) }
     }
 }
 
+#[unstable = "awaiting int/uint conventions, types may change"]
 impl AtomicUint {
     /// Creates a new `AtomicUint`.
     ///
@@ -539,9 +592,8 @@ impl AtomicUint {
     /// let atomic_forty_two = AtomicUint::new(42u);
     /// ```
     #[inline]
-    #[stable]
     pub fn new(v: uint) -> AtomicUint {
-        AtomicUint { v: UnsafeCell::new(v), nocopy: marker::NoCopy }
+        AtomicUint { v: UnsafeCell::new(v) }
     }
 
     /// Loads a value from the uint.
@@ -562,7 +614,6 @@ impl AtomicUint {
     /// let value = some_uint.load(Ordering::Relaxed);
     /// ```
     #[inline]
-    #[stable]
     pub fn load(&self, order: Ordering) -> uint {
         unsafe { atomic_load(self.v.get() as *const uint, order) }
     }
@@ -585,7 +636,6 @@ impl AtomicUint {
     ///
     /// Panics if `order` is `Acquire` or `AcqRel`.
     #[inline]
-    #[stable]
     pub fn store(&self, val: uint, order: Ordering) {
         unsafe { atomic_store(self.v.get(), val, order); }
     }
@@ -604,7 +654,6 @@ impl AtomicUint {
     /// let value = some_uint.swap(10, Ordering::Relaxed);
     /// ```
     #[inline]
-    #[stable]
     pub fn swap(&self, val: uint, order: Ordering) -> uint {
         unsafe { atomic_swap(self.v.get(), val, order) }
     }
@@ -626,7 +675,6 @@ impl AtomicUint {
     /// let value = some_uint.compare_and_swap(5, 10, Ordering::Relaxed);
     /// ```
     #[inline]
-    #[stable]
     pub fn compare_and_swap(&self, old: uint, new: uint, order: Ordering) -> uint {
         unsafe { atomic_compare_and_swap(self.v.get(), old, new, order) }
     }
@@ -636,14 +684,13 @@ impl AtomicUint {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::atomic::{AtomicUint, SeqCst};
+    /// use std::sync::atomic::{AtomicUint, Ordering};
     ///
     /// let foo = AtomicUint::new(0);
-    /// assert_eq!(0, foo.fetch_add(10, SeqCst));
-    /// assert_eq!(10, foo.load(SeqCst));
+    /// assert_eq!(0, foo.fetch_add(10, Ordering::SeqCst));
+    /// assert_eq!(10, foo.load(Ordering::SeqCst));
     /// ```
     #[inline]
-    #[stable]
     pub fn fetch_add(&self, val: uint, order: Ordering) -> uint {
         unsafe { atomic_add(self.v.get(), val, order) }
     }
@@ -653,14 +700,13 @@ impl AtomicUint {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::atomic::{AtomicUint, SeqCst};
+    /// use std::sync::atomic::{AtomicUint, Ordering};
     ///
     /// let foo = AtomicUint::new(10);
-    /// assert_eq!(10, foo.fetch_sub(10, SeqCst));
-    /// assert_eq!(0, foo.load(SeqCst));
+    /// assert_eq!(10, foo.fetch_sub(10, Ordering::SeqCst));
+    /// assert_eq!(0, foo.load(Ordering::SeqCst));
     /// ```
     #[inline]
-    #[stable]
     pub fn fetch_sub(&self, val: uint, order: Ordering) -> uint {
         unsafe { atomic_sub(self.v.get(), val, order) }
     }
@@ -670,13 +716,12 @@ impl AtomicUint {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::atomic::{AtomicUint, SeqCst};
+    /// use std::sync::atomic::{AtomicUint, Ordering};
     ///
     /// let foo = AtomicUint::new(0b101101);
-    /// assert_eq!(0b101101, foo.fetch_and(0b110011, SeqCst));
-    /// assert_eq!(0b100001, foo.load(SeqCst));
+    /// assert_eq!(0b101101, foo.fetch_and(0b110011, Ordering::SeqCst));
+    /// assert_eq!(0b100001, foo.load(Ordering::SeqCst));
     #[inline]
-    #[stable]
     pub fn fetch_and(&self, val: uint, order: Ordering) -> uint {
         unsafe { atomic_and(self.v.get(), val, order) }
     }
@@ -686,13 +731,12 @@ impl AtomicUint {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::atomic::{AtomicUint, SeqCst};
+    /// use std::sync::atomic::{AtomicUint, Ordering};
     ///
     /// let foo = AtomicUint::new(0b101101);
-    /// assert_eq!(0b101101, foo.fetch_or(0b110011, SeqCst));
-    /// assert_eq!(0b111111, foo.load(SeqCst));
+    /// assert_eq!(0b101101, foo.fetch_or(0b110011, Ordering::SeqCst));
+    /// assert_eq!(0b111111, foo.load(Ordering::SeqCst));
     #[inline]
-    #[stable]
     pub fn fetch_or(&self, val: uint, order: Ordering) -> uint {
         unsafe { atomic_or(self.v.get(), val, order) }
     }
@@ -702,13 +746,12 @@ impl AtomicUint {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::atomic::{AtomicUint, SeqCst};
+    /// use std::sync::atomic::{AtomicUint, Ordering};
     ///
     /// let foo = AtomicUint::new(0b101101);
-    /// assert_eq!(0b101101, foo.fetch_xor(0b110011, SeqCst));
-    /// assert_eq!(0b011110, foo.load(SeqCst));
+    /// assert_eq!(0b101101, foo.fetch_xor(0b110011, Ordering::SeqCst));
+    /// assert_eq!(0b011110, foo.load(Ordering::SeqCst));
     #[inline]
-    #[stable]
     pub fn fetch_xor(&self, val: uint, order: Ordering) -> uint {
         unsafe { atomic_xor(self.v.get(), val, order) }
     }
@@ -728,7 +771,7 @@ impl<T> AtomicPtr<T> {
     #[inline]
     #[stable]
     pub fn new(p: *mut T) -> AtomicPtr<T> {
-        AtomicPtr { p: UnsafeCell::new(p as uint), nocopy: marker::NoCopy }
+        AtomicPtr { p: UnsafeCell::new(p as uint) }
     }
 
     /// Loads a value from the pointer.

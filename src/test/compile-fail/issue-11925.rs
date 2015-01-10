@@ -8,10 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![feature(box_syntax)]
+
 fn main() {
     let r = {
-        let x = box 42i;
-        let f = proc() &x; //~ ERROR: `x` does not live long enough
+        let x = box 42is;
+        let f = move|:| &x; //~ ERROR: `x` does not live long enough
         f()
     };
 

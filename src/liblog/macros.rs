@@ -10,8 +10,6 @@
 
 //! Logging macros
 
-#![macro_escape]
-
 /// The standard logging macro
 ///
 /// This macro will generically log over a provided level (of type u32) with a
@@ -21,8 +19,7 @@
 /// # Example
 ///
 /// ```
-/// #![feature(phase)]
-/// #[phase(plugin, link)] extern crate log;
+/// #[macro_use] extern crate log;
 ///
 /// fn main() {
 ///     log!(log::WARN, "this is a warning {}", "message");
@@ -51,7 +48,7 @@
 /// 6:main: this is a custom logging level: 6
 /// ```
 #[macro_export]
-macro_rules! log(
+macro_rules! log {
     ($lvl:expr, $($arg:tt)+) => ({
         static LOC: ::log::LogLocation = ::log::LogLocation {
             line: line!(),
@@ -60,18 +57,17 @@ macro_rules! log(
         };
         let lvl = $lvl;
         if log_enabled!(lvl) {
-            format_args!(|args| { ::log::log(lvl, &LOC, args) }, $($arg)+)
+            ::log::log(lvl, &LOC, format_args!($($arg)+))
         }
     })
-)
+}
 
 /// A convenience macro for logging at the error log level.
 ///
 /// # Example
 ///
 /// ```
-/// #![feature(phase)]
-/// #[phase(plugin, link)] extern crate log;
+/// #[macro_use] extern crate log;
 ///
 /// fn main() {
 ///     let error = 3u;
@@ -87,17 +83,16 @@ macro_rules! log(
 /// ```
 ///
 #[macro_export]
-macro_rules! error(
+macro_rules! error {
     ($($arg:tt)*) => (log!(::log::ERROR, $($arg)*))
-)
+}
 
 /// A convenience macro for logging at the warning log level.
 ///
 /// # Example
 ///
 /// ```
-/// #![feature(phase)]
-/// #[phase(plugin, link)] extern crate log;
+/// #[macro_use] extern crate log;
 ///
 /// fn main() {
 ///     let code = 3u;
@@ -112,17 +107,16 @@ macro_rules! error(
 /// WARN:main: you may like to know that a process exited with: 3
 /// ```
 #[macro_export]
-macro_rules! warn(
+macro_rules! warn {
     ($($arg:tt)*) => (log!(::log::WARN, $($arg)*))
-)
+}
 
 /// A convenience macro for logging at the info log level.
 ///
 /// # Example
 ///
 /// ```
-/// #![feature(phase)]
-/// #[phase(plugin, link)] extern crate log;
+/// #[macro_use] extern crate log;
 ///
 /// fn main() {
 ///     let ret = 3i;
@@ -137,9 +131,9 @@ macro_rules! warn(
 /// INFO:main: this function is about to return: 3
 /// ```
 #[macro_export]
-macro_rules! info(
+macro_rules! info {
     ($($arg:tt)*) => (log!(::log::INFO, $($arg)*))
-)
+}
 
 /// A convenience macro for logging at the debug log level. This macro can also
 /// be omitted at compile time by passing `--cfg ndebug` to the compiler. If
@@ -148,8 +142,7 @@ macro_rules! info(
 /// # Example
 ///
 /// ```
-/// #![feature(phase)]
-/// #[phase(plugin, link)] extern crate log;
+/// #[macro_use] extern crate log;
 ///
 /// fn main() {
 ///     debug!("x = {x}, y = {y}", x=10i, y=20i);
@@ -163,17 +156,16 @@ macro_rules! info(
 /// DEBUG:main: x = 10, y = 20
 /// ```
 #[macro_export]
-macro_rules! debug(
+macro_rules! debug {
     ($($arg:tt)*) => (if cfg!(not(ndebug)) { log!(::log::DEBUG, $($arg)*) })
-)
+}
 
 /// A macro to test whether a log level is enabled for the current module.
 ///
 /// # Example
 ///
 /// ```
-/// #![feature(phase)]
-/// #[phase(plugin, link)] extern crate log;
+/// #[macro_use] extern crate log;
 ///
 /// struct Point { x: int, y: int }
 /// fn some_expensive_computation() -> Point { Point { x: 1, y: 2 } }
@@ -197,11 +189,12 @@ macro_rules! debug(
 /// DEBUG:main: x.x = 1, x.y = 2
 /// ```
 #[macro_export]
-macro_rules! log_enabled(
+macro_rules! log_enabled {
     ($lvl:expr) => ({
         let lvl = $lvl;
         (lvl != ::log::DEBUG || cfg!(not(ndebug))) &&
         lvl <= ::log::log_level() &&
         ::log::mod_enabled(lvl, module_path!())
     })
-)
+}
+

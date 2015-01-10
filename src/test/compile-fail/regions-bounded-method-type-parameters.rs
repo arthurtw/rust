@@ -18,9 +18,9 @@ impl Foo {
     fn some_method<A:'static>(self) { }
 }
 
-fn caller<'a>(x: &int) {
-    Foo.some_method::<&'a int>();
-    //~^ ERROR does not fulfill the required lifetime
+fn caller<'a>(x: &isize) {
+    Foo.some_method::<&'a isize>();
+    //~^ ERROR declared lifetime bound not satisfied
 }
 
 fn main() { }

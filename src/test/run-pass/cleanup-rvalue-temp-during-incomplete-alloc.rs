@@ -24,7 +24,10 @@
 // It's unclear how likely such a bug is to recur, but it seems like a
 // scenario worth testing.
 
-use std::task;
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
+use std::thread::Thread;
 
 enum Conzabble {
     Bickwick(Foo)
@@ -45,5 +48,5 @@ pub fn fails() {
 }
 
 pub fn main() {
-    task::try(fails);
+    Thread::scoped(fails).join();
 }

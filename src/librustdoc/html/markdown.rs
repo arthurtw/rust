@@ -14,7 +14,7 @@
 //! (bundled into the rust runtime). This module self-contains the C bindings
 //! and necessary legwork to render markdown, and exposes all of the
 //! functionality through a unit-struct, `Markdown`, which has an implementation
-//! of `fmt::Show`. Example usage:
+//! of `fmt::String`. Example usage:
 //!
 //! ```rust,ignore
 //! use rustdoc::html::markdown::Markdown;
@@ -29,18 +29,19 @@
 
 use libc;
 use std::ascii::AsciiExt;
+use std::ffi::CString;
 use std::cell::{RefCell, Cell};
+use std::collections::HashMap;
 use std::fmt;
 use std::slice;
 use std::str;
-use std::collections::HashMap;
 
 use html::toc::TocBuilder;
 use html::highlight;
 use html::escape::Escape;
 use test;
 
-/// A unit struct which has the `fmt::Show` trait implemented. When
+/// A unit struct which has the `fmt::String` trait implemented. When
 /// formatted, this struct will emit the HTML corresponding to the rendered
 /// version of the contained markdown string.
 pub struct Markdown<'a>(pub &'a str);
@@ -65,18 +66,22 @@ const HOEDOWN_EXTENSIONS: libc::c_uint =
 
 type hoedown_document = libc::c_void;  // this is opaque to us
 
+type blockcodefn = extern "C" fn(*mut hoedown_buffer, *const hoedown_buffer,
+                                 *const hoedown_buffer, *mut libc::c_void);
+
+type headerfn = extern "C" fn(*mut hoedown_buffer, *const hoedown_buffer,
+                              libc::c_int, *mut libc::c_void);
+
 #[repr(C)]
 struct hoedown_renderer {
     opaque: *mut hoedown_html_renderer_state,
-    blockcode: Option<extern "C" fn(*mut hoedown_buffer, *const hoedown_buffer,
-                                    *const hoedown_buffer, *mut libc::c_void)>,
+    blockcode: Option<blockcodefn>,
     blockquote: Option<extern "C" fn(*mut hoedown_buffer, *const hoedown_buffer,
                                      *mut libc::c_void)>,
     blockhtml: Option<extern "C" fn(*mut hoedown_buffer, *const hoedown_buffer,
                                     *mut libc::c_void)>,
-    header: Option<extern "C" fn(*mut hoedown_buffer, *const hoedown_buffer,
-                                 libc::c_int, *mut libc::c_void)>,
-    other: [libc::size_t, ..28],
+    header: Option<headerfn>,
+    other: [libc::size_t; 28],
 }
 
 #[repr(C)]
@@ -149,12 +154,12 @@ fn stripped_filtered_line<'a>(s: &'a str) -> Option<&'a str> {
 
 thread_local!(static USED_HEADER_MAP: RefCell<HashMap<String, uint>> = {
     RefCell::new(HashMap::new())
-})
-thread_local!(static TEST_IDX: Cell<uint> = Cell::new(0))
+});
+thread_local!(static TEST_IDX: Cell<uint> = Cell::new(0));
 
 thread_local!(pub static PLAYGROUND_KRATE: RefCell<Option<Option<String>>> = {
     RefCell::new(None)
-})
+});
 
 pub fn render(w: &mut fmt::Formatter, s: &str, print_toc: bool) -> fmt::Result {
     extern fn block(ob: *mut hoedown_buffer, orig_text: *const hoedown_buffer,
@@ -167,14 +172,14 @@ pub fn render(w: &mut fmt::Formatter, s: &str, print_toc: bool) -> fmt::Result {
             let text = slice::from_raw_buf(&(*orig_text).data,
                                            (*orig_text).size as uint);
             let origtext = str::from_utf8(text).unwrap();
-            debug!("docblock: ==============\n{}\n=======", text);
+            debug!("docblock: ==============\n{:?}\n=======", text);
             let rendered = if lang.is_null() {
                 false
             } else {
                 let rlang = slice::from_raw_buf(&(*lang).data,
                                                 (*lang).size as uint);
                 let rlang = str::from_utf8(rlang).unwrap();
-                if LangString::parse(rlang).notrust {
+                if !LangString::parse(rlang).rust {
                     (my_opaque.dfltblk)(ob, orig_text, lang,
                                         opaque as *mut libc::c_void);
                     true
@@ -210,7 +215,7 @@ pub fn render(w: &mut fmt::Formatter, s: &str, print_toc: bool) -> fmt::Result {
                 let id = id.as_ref().map(|a| a.as_slice());
                 s.push_str(highlight::highlight(text.as_slice(), None, id)
                                      .as_slice());
-                let output = s.to_c_str();
+                let output = CString::from_vec(s.into_bytes());
                 hoedown_buffer_puts(ob, output.as_ptr());
             })
         }
@@ -219,19 +224,20 @@ pub fn render(w: &mut fmt::Formatter, s: &str, print_toc: bool) -> fmt::Result {
     extern fn header(ob: *mut hoedown_buffer, text: *const hoedown_buffer,
                      level: libc::c_int, opaque: *mut libc::c_void) {
         // hoedown does this, we may as well too
-        "\n".with_c_str(|p| unsafe { hoedown_buffer_puts(ob, p) });
+        unsafe { hoedown_buffer_puts(ob, "\n\0".as_ptr() as *const _); }
 
         // Extract the text provided
         let s = if text.is_null() {
             "".to_string()
         } else {
-            unsafe {
-                String::from_raw_buf_len((*text).data, (*text).size as uint)
-            }
+            let s = unsafe {
+                slice::from_raw_buf(&(*text).data, (*text).size as uint)
+            };
+            str::from_utf8(s).unwrap().to_string()
         };
 
         // Transform the contents of the header into a hyphenated string
-        let id = s.words().map(|s| s.to_ascii_lower())
+        let id = s.words().map(|s| s.to_ascii_lowercase())
             .collect::<Vec<String>>().connect("-");
 
         // This is a terrible hack working around how hoedown gives us rendered
@@ -268,7 +274,8 @@ pub fn render(w: &mut fmt::Formatter, s: &str, print_toc: bool) -> fmt::Result {
                                format!("{} ", sec)
                            });
 
-        text.with_c_str(|p| unsafe { hoedown_buffer_puts(ob, p) });
+        let text = CString::from_vec(text.into_bytes());
+        unsafe { hoedown_buffer_puts(ob, text.as_ptr()) }
     }
 
     reset_headers();
@@ -281,8 +288,8 @@ pub fn render(w: &mut fmt::Formatter, s: &str, print_toc: bool) -> fmt::Result {
             toc_builder: if print_toc {Some(TocBuilder::new())} else {None}
         };
         (*(*renderer).opaque).opaque = &mut opaque as *mut _ as *mut libc::c_void;
-        (*renderer).blockcode = Some(block);
-        (*renderer).header = Some(header);
+        (*renderer).blockcode = Some(block as blockcodefn);
+        (*renderer).header = Some(header as headerfn);
 
         let document = hoedown_document_new(renderer, HOEDOWN_EXTENSIONS, 16);
         hoedown_document_render(document, ob, s.as_ptr(),
@@ -298,7 +305,7 @@ pub fn render(w: &mut fmt::Formatter, s: &str, print_toc: bool) -> fmt::Result {
 
         if ret.is_ok() {
             let buf = slice::from_raw_buf(&(*ob).data, (*ob).size as uint);
-            ret = w.write(buf);
+            ret = w.write_str(str::from_utf8(buf).unwrap());
         }
         hoedown_buffer_free(ob);
         ret
@@ -320,7 +327,7 @@ pub fn find_testable_code(doc: &str, tests: &mut ::test::Collector) {
                 let s = str::from_utf8(lang).unwrap();
                 LangString::parse(s)
             };
-            if block_info.notrust { return }
+            if !block_info.rust { return }
             let text = slice::from_raw_buf(&(*text).data, (*text).size as uint);
             let opaque = opaque as *mut hoedown_html_renderer_state;
             let tests = &mut *((*opaque).opaque as *mut ::test::Collector);
@@ -354,8 +361,8 @@ pub fn find_testable_code(doc: &str, tests: &mut ::test::Collector) {
     unsafe {
         let ob = hoedown_buffer_new(DEF_OUNIT);
         let renderer = hoedown_html_renderer_new(0, 0);
-        (*renderer).blockcode = Some(block);
-        (*renderer).header = Some(header);
+        (*renderer).blockcode = Some(block as blockcodefn);
+        (*renderer).header = Some(header as headerfn);
         (*(*renderer).opaque).opaque = tests as *mut _ as *mut libc::c_void;
 
         let document = hoedown_document_new(renderer, HOEDOWN_EXTENSIONS, 16);
@@ -368,12 +375,12 @@ pub fn find_testable_code(doc: &str, tests: &mut ::test::Collector) {
     }
 }
 
-#[deriving(Eq, PartialEq, Clone, Show)]
+#[derive(Eq, PartialEq, Clone, Show)]
 struct LangString {
     should_fail: bool,
     no_run: bool,
     ignore: bool,
-    notrust: bool,
+    rust: bool,
     test_harness: bool,
 }
 
@@ -383,7 +390,7 @@ impl LangString {
             should_fail: false,
             no_run: false,
             ignore: false,
-            notrust: false,
+            rust: true,  // NB This used to be `notrust = false`
             test_harness: false,
         }
     }
@@ -393,7 +400,7 @@ impl LangString {
         let mut seen_other_tags = false;
         let mut data = LangString::all_false();
 
-        let mut tokens = string.split(|c: char|
+        let mut tokens = string.split(|&: c: char|
             !(c == '_' || c == '-' || c.is_alphanumeric())
         );
 
@@ -403,14 +410,13 @@ impl LangString {
                 "should_fail" => { data.should_fail = true; seen_rust_tags = true; },
                 "no_run" => { data.no_run = true; seen_rust_tags = true; },
                 "ignore" => { data.ignore = true; seen_rust_tags = true; },
-                "notrust" => { data.notrust = true; seen_rust_tags = true; },
-                "rust" => { data.notrust = false; seen_rust_tags = true; },
+                "rust" => { data.rust = true; seen_rust_tags = true; },
                 "test_harness" => { data.test_harness = true; seen_rust_tags = true; }
                 _ => { seen_other_tags = true }
             }
         }
 
-        data.notrust |= seen_other_tags && !seen_rust_tags;
+        data.rust &= !seen_other_tags || seen_rust_tags;
 
         data
     }
@@ -429,7 +435,7 @@ pub fn reset_headers() {
     TEST_IDX.with(|s| s.set(0));
 }
 
-impl<'a> fmt::Show for Markdown<'a> {
+impl<'a> fmt::String for Markdown<'a> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         let Markdown(md) = *self;
         // This is actually common enough to special-case
@@ -438,7 +444,7 @@ impl<'a> fmt::Show for Markdown<'a> {
     }
 }
 
-impl<'a> fmt::Show for MarkdownWithToc<'a> {
+impl<'a> fmt::String for MarkdownWithToc<'a> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         let MarkdownWithToc(md) = *self;
         render(fmt, md.as_slice(), true)
@@ -452,28 +458,28 @@ mod tests {
     #[test]
     fn test_lang_string_parse() {
         fn t(s: &str,
-             should_fail: bool, no_run: bool, ignore: bool, notrust: bool, test_harness: bool) {
+            should_fail: bool, no_run: bool, ignore: bool, rust: bool, test_harness: bool) {
             assert_eq!(LangString::parse(s), LangString {
                 should_fail: should_fail,
                 no_run: no_run,
                 ignore: ignore,
-                notrust: notrust,
+                rust: rust,
                 test_harness: test_harness,
             })
         }
 
-        t("", false,false,false,false,false);
-        t("rust", false,false,false,false,false);
-        t("sh", false,false,false,true,false);
-        t("notrust", false,false,false,true,false);
-        t("ignore", false,false,true,false,false);
-        t("should_fail", true,false,false,false,false);
-        t("no_run", false,true,false,false,false);
-        t("test_harness", false,false,false,false,true);
-        t("{.no_run .example}", false,true,false,false,false);
-        t("{.sh .should_fail}", true,false,false,false,false);
-        t("{.example .rust}", false,false,false,false,false);
-        t("{.test_harness .rust}", false,false,false,false,true);
+        // marker                | should_fail | no_run | ignore | rust | test_harness
+        t("",                      false,        false,   false,   true,  false);
+        t("rust",                  false,        false,   false,   true,  false);
+        t("sh",                    false,        false,   false,   false, false);
+        t("ignore",                false,        false,   true,    true,  false);
+        t("should_fail",           true,         false,   false,   true,  false);
+        t("no_run",                false,        true,    false,   true,  false);
+        t("test_harness",          false,        false,   false,   true,  true);
+        t("{.no_run .example}",    false,        true,    false,   true,  false);
+        t("{.sh .should_fail}",    true,         false,   false,   true,  false);
+        t("{.example .rust}",      false,        false,   false,   true,  false);
+        t("{.test_harness .rust}", false,        false,   false,   true,  true);
     }
 
     #[test]

@@ -12,34 +12,48 @@
 
 //! An owned, growable string that enforces that its contents are valid UTF-8.
 
+#![stable]
+
 use core::prelude::*;
 
 use core::borrow::{Cow, IntoCow};
 use core::default::Default;
 use core::fmt;
+use core::hash;
+use core::iter::FromIterator;
 use core::mem;
+use core::ops::{self, Deref, Add, Index};
 use core::ptr;
-use core::ops;
-// FIXME: ICE's abound if you import the `Slice` type while importing `Slice` trait
 use core::raw::Slice as RawSlice;
+use unicode::str as unicode_str;
+use unicode::str::Utf16Item;
 
-use hash;
-use slice::CloneSliceAllocPrelude;
-use str;
-use str::{CharRange, CowString, FromStr, StrAllocating, Owned};
+use str::{self, CharRange, FromStr, Utf8Error};
 use vec::{DerefVec, Vec, as_vec};
 
 /// A growable string stored as a UTF-8 encoded buffer.
-#[deriving(Clone, PartialOrd, Eq, Ord)]
+#[derive(Clone, PartialOrd, Eq, Ord)]
 #[stable]
 pub struct String {
     vec: Vec<u8>,
 }
 
+/// A possible error value from the `String::from_utf8` function.
+#[stable]
+pub struct FromUtf8Error {
+    bytes: Vec<u8>,
+    error: Utf8Error,
+}
+
+/// A possible error value from the `String::from_utf16` function.
+#[stable]
+#[allow(missing_copy_implementations)]
+pub struct FromUtf16Error(());
+
 impl String {
     /// Creates a new string buffer initialized with the empty string.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let mut s = String::new();
@@ -56,7 +70,7 @@ impl String {
     /// The string will be able to hold exactly `capacity` bytes without
     /// reallocating. If `capacity` is 0, the string will not allocate.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let mut s = String::with_capacity(10);
@@ -71,67 +85,76 @@ impl String {
 
     /// Creates a new string buffer from the given string.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let s = String::from_str("hello");
     /// assert_eq!(s.as_slice(), "hello");
     /// ```
     #[inline]
-    #[experimental = "needs investigation to see if to_string() can match perf"]
+    #[unstable = "needs investigation to see if to_string() can match perf"]
     pub fn from_str(string: &str) -> String {
-        String { vec: string.as_bytes().to_vec() }
+        String { vec: ::slice::SliceExt::to_vec(string.as_bytes()) }
     }
 
     /// Returns the vector as a string buffer, if possible, taking care not to
     /// copy it.
     ///
-    /// Returns `Err` with the original vector if the vector contains invalid
-    /// UTF-8.
+    /// # Failure
     ///
-    /// # Example
+    /// If the given vector is not valid UTF-8, then the original vector and the
+    /// corresponding error is returned.
+    ///
+    /// # Examples
     ///
     /// ```rust
+    /// use std::str::Utf8Error;
+    ///
     /// let hello_vec = vec![104, 101, 108, 108, 111];
-    /// let s = String::from_utf8(hello_vec);
-    /// assert_eq!(s, Ok("hello".to_string()));
+    /// let s = String::from_utf8(hello_vec).unwrap();
+    /// assert_eq!(s, "hello");
     ///
     /// let invalid_vec = vec![240, 144, 128];
-    /// let s = String::from_utf8(invalid_vec);
-    /// assert_eq!(s, Err(vec![240, 144, 128]));
+    /// let s = String::from_utf8(invalid_vec).err().unwrap();
+    /// assert_eq!(s.utf8_error(), Utf8Error::TooShort);
+    /// assert_eq!(s.into_bytes(), vec![240, 144, 128]);
     /// ```
     #[inline]
-    #[unstable = "error type may change"]
-    pub fn from_utf8(vec: Vec<u8>) -> Result<String, Vec<u8>> {
-        if str::is_utf8(vec.as_slice()) {
-            Ok(String { vec: vec })
-        } else {
-            Err(vec)
+    #[stable]
+    pub fn from_utf8(vec: Vec<u8>) -> Result<String, FromUtf8Error> {
+        match str::from_utf8(vec.as_slice()) {
+            Ok(..) => Ok(String { vec: vec }),
+            Err(e) => Err(FromUtf8Error { bytes: vec, error: e })
         }
     }
 
     /// Converts a vector of bytes to a new UTF-8 string.
     /// Any invalid UTF-8 sequences are replaced with U+FFFD REPLACEMENT CHARACTER.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```rust
     /// let input = b"Hello \xF0\x90\x80World";
     /// let output = String::from_utf8_lossy(input);
-    /// assert_eq!(output.as_slice(), "Hello \uFFFDWorld");
+    /// assert_eq!(output.as_slice(), "Hello \u{FFFD}World");
     /// ```
-    #[unstable = "return type may change"]
+    #[stable]
     pub fn from_utf8_lossy<'a>(v: &'a [u8]) -> CowString<'a> {
-        if str::is_utf8(v) {
-            return Cow::Borrowed(unsafe { mem::transmute(v) })
+        let mut i = 0;
+        match str::from_utf8(v) {
+            Ok(s) => return Cow::Borrowed(s),
+            Err(e) => {
+                if let Utf8Error::InvalidByte(firstbad) = e {
+                    i = firstbad;
+                }
+            }
         }
 
         static TAG_CONT_U8: u8 = 128u8;
         static REPLACEMENT: &'static [u8] = b"\xEF\xBF\xBD"; // U+FFFD in UTF-8
-        let mut i = 0;
         let total = v.len();
         fn unsafe_get(xs: &[u8], i: uint) -> u8 {
-            unsafe { *xs.unsafe_get(i) }
+            unsafe { *xs.get_unchecked(i) }
         }
         fn safe_get(xs: &[u8], i: uint, total: uint) -> u8 {
             if i >= total {
@@ -145,34 +168,34 @@ impl String {
 
         if i > 0 {
             unsafe {
-                res.as_mut_vec().push_all(v[..i])
+                res.as_mut_vec().push_all(&v[0..i])
             };
         }
 
         // subseqidx is the index of the first byte of the subsequence we're looking at.
         // It's used to copy a bunch of contiguous good codepoints at once instead of copying
         // them one by one.
-        let mut subseqidx = 0;
+        let mut subseqidx = i;
 
         while i < total {
             let i_ = i;
             let byte = unsafe_get(v, i);
             i += 1;
 
-            macro_rules! error(() => ({
+            macro_rules! error { () => ({
                 unsafe {
                     if subseqidx != i_ {
-                        res.as_mut_vec().push_all(v[subseqidx..i_]);
+                        res.as_mut_vec().push_all(&v[subseqidx..i_]);
                     }
                     subseqidx = i;
                     res.as_mut_vec().push_all(REPLACEMENT);
                 }
-            }))
+            })}
 
             if byte < 128u8 {
                 // subseqidx handles this
             } else {
-                let w = str::utf8_char_width(byte);
+                let w = unicode_str::utf8_char_width(byte);
 
                 match w {
                     2 => {
@@ -231,43 +254,45 @@ impl String {
         }
         if subseqidx < total {
             unsafe {
-                res.as_mut_vec().push_all(v[subseqidx..total])
+                res.as_mut_vec().push_all(&v[subseqidx..total])
             };
         }
-        Cow::Owned(res.into_string())
+        Cow::Owned(res)
     }
 
     /// Decode a UTF-16 encoded vector `v` into a `String`, returning `None`
     /// if `v` contains any invalid data.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```rust
     /// // 𝄞music
     /// let mut v = &mut [0xD834, 0xDD1E, 0x006d, 0x0075,
     ///                   0x0073, 0x0069, 0x0063];
-    /// assert_eq!(String::from_utf16(v), Some("𝄞music".to_string()));
+    /// assert_eq!(String::from_utf16(v).unwrap(),
+    ///            "𝄞music".to_string());
     ///
     /// // 𝄞mu<invalid>ic
     /// v[4] = 0xD800;
-    /// assert_eq!(String::from_utf16(v), None);
+    /// assert!(String::from_utf16(v).is_err());
     /// ```
-    #[unstable = "error value in return may change"]
-    pub fn from_utf16(v: &[u16]) -> Option<String> {
+    #[stable]
+    pub fn from_utf16(v: &[u16]) -> Result<String, FromUtf16Error> {
         let mut s = String::with_capacity(v.len());
-        for c in str::utf16_items(v) {
+        for c in unicode_str::utf16_items(v) {
             match c {
-                str::ScalarValue(c) => s.push(c),
-                str::LoneSurrogate(_) => return None
+                Utf16Item::ScalarValue(c) => s.push(c),
+                Utf16Item::LoneSurrogate(_) => return Err(FromUtf16Error(())),
             }
         }
-        Some(s)
+        Ok(s)
     }
 
     /// Decode a UTF-16 encoded vector `v` into a string, replacing
     /// invalid data with the replacement character (U+FFFD).
     ///
-    /// # Example
+    /// # Examples
+    ///
     /// ```rust
     /// // 𝄞mus<invalid>ic<invalid>
     /// let v = &[0xD834, 0xDD1E, 0x006d, 0x0075,
@@ -275,26 +300,11 @@ impl String {
     ///           0xD834];
     ///
     /// assert_eq!(String::from_utf16_lossy(v),
-    ///            "𝄞mus\uFFFDic\uFFFD".to_string());
+    ///            "𝄞mus\u{FFFD}ic\u{FFFD}".to_string());
     /// ```
     #[stable]
     pub fn from_utf16_lossy(v: &[u16]) -> String {
-        str::utf16_items(v).map(|c| c.to_char_lossy()).collect()
-    }
-
-    /// Convert a vector of `char`s to a `String`.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let chars = &['h', 'e', 'l', 'l', 'o'];
-    /// let s = String::from_chars(chars);
-    /// assert_eq!(s.as_slice(), "hello");
-    /// ```
-    #[inline]
-    #[unstable = "may be removed in favor of .collect()"]
-    pub fn from_chars(chs: &[char]) -> String {
-        chs.iter().map(|c| *c).collect()
+        unicode_str::utf16_items(v).map(|c| c.to_char_lossy()).collect()
     }
 
     /// Creates a new `String` from a length, capacity, and pointer.
@@ -303,49 +313,25 @@ impl String {
     /// * We call `Vec::from_raw_parts` to get a `Vec<u8>`;
     /// * We assume that the `Vec` contains valid UTF-8.
     #[inline]
-    #[unstable = "function just moved from string::raw"]
+    #[stable]
     pub unsafe fn from_raw_parts(buf: *mut u8, length: uint, capacity: uint) -> String {
         String {
             vec: Vec::from_raw_parts(buf, length, capacity),
         }
     }
 
-    /// Creates a `String` from a null-terminated `*const u8` buffer.
-    ///
-    /// This function is unsafe because we dereference memory until we find the
-    /// NUL character, which is not guaranteed to be present. Additionally, the
-    /// slice is not checked to see whether it contains valid UTF-8
-    #[unstable = "just renamed from `mod raw`"]
-    pub unsafe fn from_raw_buf(buf: *const u8) -> String {
-        String::from_str(str::from_c_str(buf as *const i8))
-    }
-
-    /// Creates a `String` from a `*const u8` buffer of the given length.
-    ///
-    /// This function is unsafe because it blindly assumes the validity of the
-    /// pointer `buf` for `len` bytes of memory. This function will copy the
-    /// memory from `buf` into a new allocation (owned by the returned
-    /// `String`).
-    ///
-    /// This function is also unsafe because it does not validate that the
-    /// buffer is valid UTF-8 encoded data.
-    #[unstable = "just renamed from `mod raw`"]
-    pub unsafe fn from_raw_buf_len(buf: *const u8, len: uint) -> String {
-        String::from_utf8_unchecked(Vec::from_raw_buf(buf, len))
-    }
-
     /// Converts a vector of bytes to a new `String` without checking if
     /// it contains valid UTF-8. This is unsafe because it assumes that
     /// the UTF-8-ness of the vector has already been validated.
     #[inline]
-    #[unstable = "awaiting stabilization"]
+    #[stable]
     pub unsafe fn from_utf8_unchecked(bytes: Vec<u8>) -> String {
         String { vec: bytes }
     }
 
     /// Return the underlying byte buffer, encoded as UTF-8.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let s = String::from_str("hello");
@@ -358,35 +344,9 @@ impl String {
         self.vec
     }
 
-    /// Creates a string buffer by repeating a character `length` times.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// let s = String::from_char(5, 'a');
-    /// assert_eq!(s.as_slice(), "aaaaa");
-    /// ```
-    #[inline]
-    #[unstable = "may be replaced with iterators, questionable usability, and \
-                  the name may change"]
-    pub fn from_char(length: uint, ch: char) -> String {
-        if length == 0 {
-            return String::new()
-        }
-
-        let mut buf = String::new();
-        buf.push(ch);
-        let size = buf.len() * (length - 1);
-        buf.reserve_exact(size);
-        for _ in range(1, length) {
-            buf.push(ch)
-        }
-        buf
-    }
-
     /// Pushes the given string onto this string buffer.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let mut s = String::from_str("foo");
@@ -394,56 +354,35 @@ impl String {
     /// assert_eq!(s.as_slice(), "foobar");
     /// ```
     #[inline]
-    #[unstable = "extra variants of `push`, could possibly be based on iterators"]
+    #[stable]
     pub fn push_str(&mut self, string: &str) {
         self.vec.push_all(string.as_bytes())
     }
 
-    /// Pushes `ch` onto the given string `count` times.
+    /// Returns the number of bytes that this string buffer can hold without
+    /// reallocating.
     ///
-    /// # Example
-    ///
-    /// ```
-    /// let mut s = String::from_str("foo");
-    /// s.grow(5, 'Z');
-    /// assert_eq!(s.as_slice(), "fooZZZZZ");
-    /// ```
-    #[inline]
-    #[unstable = "duplicate of iterator-based functionality"]
-    pub fn grow(&mut self, count: uint, ch: char) {
-        for _ in range(0, count) {
-            self.push(ch)
-        }
-    }
-
-    /// Returns the number of bytes that this string buffer can hold without reallocating.
-    ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let s = String::with_capacity(10);
     /// assert!(s.capacity() >= 10);
     /// ```
     #[inline]
-    #[unstable = "matches collection reform specification, waiting for dust to settle"]
+    #[stable]
     pub fn capacity(&self) -> uint {
         self.vec.capacity()
     }
 
-    /// Deprecated: Renamed to `reserve`.
-    #[deprecated = "Renamed to `reserve`"]
-    pub fn reserve_additional(&mut self, extra: uint) {
-        self.vec.reserve(extra)
-    }
-
-    /// Reserves capacity for at least `additional` more bytes to be inserted in the given
-    /// `String`. The collection may reserve more space to avoid frequent reallocations.
+    /// Reserves capacity for at least `additional` more bytes to be inserted
+    /// in the given `String`. The collection may reserve more space to avoid
+    /// frequent reallocations.
     ///
     /// # Panics
     ///
     /// Panics if the new capacity overflows `uint`.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let mut s = String::new();
@@ -451,23 +390,24 @@ impl String {
     /// assert!(s.capacity() >= 10);
     /// ```
     #[inline]
-    #[unstable = "matches collection reform specification, waiting for dust to settle"]
+    #[stable]
     pub fn reserve(&mut self, additional: uint) {
         self.vec.reserve(additional)
     }
 
-    /// Reserves the minimum capacity for exactly `additional` more bytes to be inserted in the
-    /// given `String`. Does nothing if the capacity is already sufficient.
+    /// Reserves the minimum capacity for exactly `additional` more bytes to be
+    /// inserted in the given `String`. Does nothing if the capacity is already
+    /// sufficient.
     ///
-    /// Note that the allocator may give the collection more space than it requests. Therefore
-    /// capacity can not be relied upon to be precisely minimal. Prefer `reserve` if future
-    /// insertions are expected.
+    /// Note that the allocator may give the collection more space than it
+    /// requests. Therefore capacity can not be relied upon to be precisely
+    /// minimal. Prefer `reserve` if future insertions are expected.
     ///
     /// # Panics
     ///
     /// Panics if the new capacity overflows `uint`.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let mut s = String::new();
@@ -475,14 +415,14 @@ impl String {
     /// assert!(s.capacity() >= 10);
     /// ```
     #[inline]
-    #[unstable = "matches collection reform specification, waiting for dust to settle"]
+    #[stable]
     pub fn reserve_exact(&mut self, additional: uint) {
         self.vec.reserve_exact(additional)
     }
 
     /// Shrinks the capacity of this string buffer to match its length.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let mut s = String::from_str("foo");
@@ -492,14 +432,14 @@ impl String {
     /// assert_eq!(s.capacity(), 3);
     /// ```
     #[inline]
-    #[unstable = "matches collection reform specification, waiting for dust to settle"]
+    #[stable]
     pub fn shrink_to_fit(&mut self) {
         self.vec.shrink_to_fit()
     }
 
     /// Adds the given character to the end of the string.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let mut s = String::from_str("abc");
@@ -509,8 +449,13 @@ impl String {
     /// assert_eq!(s.as_slice(), "abc123");
     /// ```
     #[inline]
-    #[stable = "function just renamed from push_char"]
+    #[stable]
     pub fn push(&mut self, ch: char) {
+        if (ch as u32) < 0x80 {
+            self.vec.push(ch as u8);
+            return;
+        }
+
         let cur_len = self.len();
         // This may use up to 4 bytes.
         self.vec.reserve(4);
@@ -529,7 +474,7 @@ impl String {
 
     /// Works with the underlying buffer as a byte slice.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let s = String::from_str("hello");
@@ -549,7 +494,7 @@ impl String {
     /// Panics if `new_len` > current length,
     /// or if `new_len` is not a character boundary.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let mut s = String::from_str("hello");
@@ -557,7 +502,7 @@ impl String {
     /// assert_eq!(s.as_slice(), "he");
     /// ```
     #[inline]
-    #[unstable = "the panic conventions for strings are under development"]
+    #[stable]
     pub fn truncate(&mut self, new_len: uint) {
         assert!(self.is_char_boundary(new_len));
         self.vec.truncate(new_len)
@@ -566,7 +511,7 @@ impl String {
     /// Removes the last character from the string buffer and returns it.
     /// Returns `None` if this string buffer is empty.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let mut s = String::from_str("foo");
@@ -576,7 +521,7 @@ impl String {
     /// assert_eq!(s.pop(), None);
     /// ```
     #[inline]
-    #[unstable = "this function was just renamed from pop_char"]
+    #[stable]
     pub fn pop(&mut self) -> Option<char> {
         let len = self.len();
         if len == 0 {
@@ -591,7 +536,7 @@ impl String {
     }
 
     /// Removes the character from the string buffer at byte position `idx` and
-    /// returns it. Returns `None` if `idx` is out of bounds.
+    /// returns it.
     ///
     /// # Warning
     ///
@@ -600,23 +545,21 @@ impl String {
     ///
     /// # Panics
     ///
-    /// If `idx` does not lie on a character boundary, then this function will
-    /// panic.
+    /// If `idx` does not lie on a character boundary, or if it is out of
+    /// bounds, then this function will panic.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let mut s = String::from_str("foo");
-    /// assert_eq!(s.remove(0), Some('f'));
-    /// assert_eq!(s.remove(1), Some('o'));
-    /// assert_eq!(s.remove(0), Some('o'));
-    /// assert_eq!(s.remove(0), None);
+    /// assert_eq!(s.remove(0), 'f');
+    /// assert_eq!(s.remove(1), 'o');
+    /// assert_eq!(s.remove(0), 'o');
     /// ```
-    #[unstable = "the panic semantics of this function and return type \
-                  may change"]
-    pub fn remove(&mut self, idx: uint) -> Option<char> {
+    #[stable]
+    pub fn remove(&mut self, idx: uint) -> char {
         let len = self.len();
-        if idx >= len { return None }
+        assert!(idx <= len);
 
         let CharRange { ch, next } = self.char_range_at(idx);
         unsafe {
@@ -625,7 +568,7 @@ impl String {
                              len - next);
             self.vec.set_len(len - (next - idx));
         }
-        Some(ch)
+        ch
     }
 
     /// Insert a character into the string buffer at byte position `idx`.
@@ -639,13 +582,13 @@ impl String {
     ///
     /// If `idx` does not lie on a character boundary or is out of bounds, then
     /// this function will panic.
-    #[unstable = "the panic semantics of this function are uncertain"]
+    #[stable]
     pub fn insert(&mut self, idx: uint, ch: char) {
         let len = self.len();
         assert!(idx <= len);
         assert!(self.is_char_boundary(idx));
         self.vec.reserve(4);
-        let mut bits = [0, ..4];
+        let mut bits = [0; 4];
         let amt = ch.encode_utf8(&mut bits).unwrap();
 
         unsafe {
@@ -664,7 +607,7 @@ impl String {
     /// This is unsafe because it does not check
     /// to ensure that the resulting string will be valid UTF-8.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let mut s = String::from_str("hello");
@@ -675,14 +618,14 @@ impl String {
     /// }
     /// assert_eq!(s.as_slice(), "olleh");
     /// ```
-    #[unstable = "the name of this method may be changed"]
+    #[stable]
     pub unsafe fn as_mut_vec<'a>(&'a mut self) -> &'a mut Vec<u8> {
         &mut self.vec
     }
 
     /// Return the number of bytes in this string.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let a = "foo".to_string();
@@ -694,7 +637,7 @@ impl String {
 
     /// Returns true if the string contains no bytes
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let mut v = String::new();
@@ -702,11 +645,12 @@ impl String {
     /// v.push('a');
     /// assert!(!v.is_empty());
     /// ```
+    #[stable]
     pub fn is_empty(&self) -> bool { self.len() == 0 }
 
     /// Truncates the string, returning it to 0 length.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// let mut s = "foo".to_string();
@@ -720,27 +664,64 @@ impl String {
     }
 }
 
-#[experimental = "waiting on FromIterator stabilization"]
+impl FromUtf8Error {
+    /// Consume this error, returning the bytes that were attempted to make a
+    /// `String` with.
+    #[stable]
+    pub fn into_bytes(self) -> Vec<u8> { self.bytes }
+
+    /// Access the underlying UTF8-error that was the cause of this error.
+    #[stable]
+    pub fn utf8_error(&self) -> Utf8Error { self.error }
+}
+
+impl fmt::Show for FromUtf8Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::String::fmt(self, f)
+    }
+}
+
+#[stable]
+impl fmt::String for FromUtf8Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::String::fmt(&self.error, f)
+    }
+}
+
+impl fmt::Show for FromUtf16Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::String::fmt(self, f)
+    }
+}
+
+#[stable]
+impl fmt::String for FromUtf16Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::String::fmt("invalid utf-16: lone surrogate found", f)
+    }
+}
+
+#[stable]
 impl FromIterator<char> for String {
-    fn from_iter<I:Iterator<char>>(iterator: I) -> String {
+    fn from_iter<I:Iterator<Item=char>>(iterator: I) -> String {
         let mut buf = String::new();
         buf.extend(iterator);
         buf
     }
 }
 
-#[experimental = "waiting on FromIterator stabilization"]
+#[stable]
 impl<'a> FromIterator<&'a str> for String {
-    fn from_iter<I:Iterator<&'a str>>(iterator: I) -> String {
+    fn from_iter<I:Iterator<Item=&'a str>>(iterator: I) -> String {
         let mut buf = String::new();
         buf.extend(iterator);
         buf
     }
 }
 
-#[experimental = "waiting on Extend stabilization"]
+#[unstable = "waiting on Extend stabilization"]
 impl Extend<char> for String {
-    fn extend<I:Iterator<char>>(&mut self, mut iterator: I) {
+    fn extend<I:Iterator<Item=char>>(&mut self, mut iterator: I) {
         let (lower_bound, _) = iterator.size_hint();
         self.reserve(lower_bound);
         for ch in iterator {
@@ -749,9 +730,9 @@ impl Extend<char> for String {
     }
 }
 
-#[experimental = "waiting on Extend stabilization"]
+#[unstable = "waiting on Extend stabilization"]
 impl<'a> Extend<&'a str> for String {
-    fn extend<I: Iterator<&'a str>>(&mut self, mut iterator: I) {
+    fn extend<I: Iterator<Item=&'a str>>(&mut self, mut iterator: I) {
         // A guess that at least one byte per iterator element will be needed.
         let (lower_bound, _) = iterator.size_hint();
         self.reserve(lower_bound);
@@ -761,6 +742,7 @@ impl<'a> Extend<&'a str> for String {
     }
 }
 
+#[stable]
 impl PartialEq for String {
     #[inline]
     fn eq(&self, other: &String) -> bool { PartialEq::eq(&**self, &**other) }
@@ -770,6 +752,7 @@ impl PartialEq for String {
 
 macro_rules! impl_eq {
     ($lhs:ty, $rhs: ty) => {
+        #[stable]
         impl<'a> PartialEq<$rhs> for $lhs {
             #[inline]
             fn eq(&self, other: &$rhs) -> bool { PartialEq::eq(&**self, &**other) }
@@ -777,6 +760,7 @@ macro_rules! impl_eq {
             fn ne(&self, other: &$rhs) -> bool { PartialEq::ne(&**self, &**other) }
         }
 
+        #[stable]
         impl<'a> PartialEq<$lhs> for $rhs {
             #[inline]
             fn eq(&self, other: &$lhs) -> bool { PartialEq::eq(&**self, &**other) }
@@ -787,9 +771,10 @@ macro_rules! impl_eq {
     }
 }
 
-impl_eq!(String, &'a str)
-impl_eq!(CowString<'a>, String)
+impl_eq! { String, &'a str }
+impl_eq! { CowString<'a>, String }
 
+#[stable]
 impl<'a, 'b> PartialEq<&'b str> for CowString<'a> {
     #[inline]
     fn eq(&self, other: &&'b str) -> bool { PartialEq::eq(&**self, &**other) }
@@ -797,6 +782,7 @@ impl<'a, 'b> PartialEq<&'b str> for CowString<'a> {
     fn ne(&self, other: &&'b str) -> bool { PartialEq::ne(&**self, &**other) }
 }
 
+#[stable]
 impl<'a, 'b> PartialEq<CowString<'a>> for &'b str {
     #[inline]
     fn eq(&self, other: &CowString<'a>) -> bool { PartialEq::eq(&**self, &**other) }
@@ -804,99 +790,111 @@ impl<'a, 'b> PartialEq<CowString<'a>> for &'b str {
     fn ne(&self, other: &CowString<'a>) -> bool { PartialEq::ne(&**self, &**other) }
 }
 
-#[experimental = "waiting on Str stabilization"]
+#[unstable = "waiting on Str stabilization"]
 impl Str for String {
     #[inline]
     #[stable]
     fn as_slice<'a>(&'a self) -> &'a str {
-        unsafe {
-            mem::transmute(self.vec.as_slice())
-        }
-    }
-}
-
-#[experimental = "waiting on StrAllocating stabilization"]
-impl StrAllocating for String {
-    #[inline]
-    fn into_string(self) -> String {
-        self
+        unsafe { mem::transmute(self.vec.as_slice()) }
     }
 }
 
 #[stable]
 impl Default for String {
+    #[stable]
     fn default() -> String {
         String::new()
     }
 }
 
-#[experimental = "waiting on Show stabilization"]
-impl fmt::Show for String {
+#[stable]
+impl fmt::String for String {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.as_slice().fmt(f)
+        fmt::String::fmt(&**self, f)
     }
 }
 
-#[experimental = "waiting on Hash stabilization"]
+#[unstable = "waiting on fmt stabilization"]
+impl fmt::Show for String {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Show::fmt(&**self, f)
+    }
+}
+
+#[unstable = "waiting on Hash stabilization"]
+#[cfg(stage0)]
 impl<H: hash::Writer> hash::Hash<H> for String {
     #[inline]
     fn hash(&self, hasher: &mut H) {
-        self.as_slice().hash(hasher)
+        (**self).hash(hasher)
+    }
+}
+#[unstable = "waiting on Hash stabilization"]
+#[cfg(not(stage0))]
+impl<H: hash::Writer + hash::Hasher> hash::Hash<H> for String {
+    #[inline]
+    fn hash(&self, hasher: &mut H) {
+        (**self).hash(hasher)
     }
 }
 
-#[allow(deprecated)]
-#[deprecated = "Use overloaded `core::cmp::PartialEq`"]
-impl<'a, S: Str> Equiv<S> for String {
-    #[inline]
-    fn equiv(&self, other: &S) -> bool {
-        self.as_slice() == other.as_slice()
+#[unstable = "recent addition, needs more experience"]
+impl<'a> Add<&'a str> for String {
+    type Output = String;
+
+    fn add(mut self, other: &str) -> String {
+        self.push_str(other);
+        self
     }
 }
 
-#[experimental = "waiting on Add stabilization"]
-impl<S: Str> Add<S, String> for String {
-    fn add(&self, other: &S) -> String {
-        let mut s = String::from_str(self.as_slice());
-        s.push_str(other.as_slice());
-        return s;
+impl ops::Index<ops::Range<uint>> for String {
+    type Output = str;
+    #[inline]
+    fn index(&self, index: &ops::Range<uint>) -> &str {
+        &self[][*index]
+    }
+}
+impl ops::Index<ops::RangeTo<uint>> for String {
+    type Output = str;
+    #[inline]
+    fn index(&self, index: &ops::RangeTo<uint>) -> &str {
+        &self[][*index]
+    }
+}
+impl ops::Index<ops::RangeFrom<uint>> for String {
+    type Output = str;
+    #[inline]
+    fn index(&self, index: &ops::RangeFrom<uint>) -> &str {
+        &self[][*index]
+    }
+}
+impl ops::Index<ops::FullRange> for String {
+    type Output = str;
+    #[inline]
+    fn index(&self, _index: &ops::FullRange) -> &str {
+        unsafe { mem::transmute(self.vec.as_slice()) }
     }
 }
 
-impl ops::Slice<uint, str> for String {
-    #[inline]
-    fn as_slice_<'a>(&'a self) -> &'a str {
-        self.as_slice()
-    }
+#[stable]
+impl ops::Deref for String {
+    type Target = str;
 
-    #[inline]
-    fn slice_from_or_fail<'a>(&'a self, from: &uint) -> &'a str {
-        self[][*from..]
+    fn deref<'a>(&'a self) -> &'a str {
+        unsafe { mem::transmute(&self.vec[]) }
     }
-
-    #[inline]
-    fn slice_to_or_fail<'a>(&'a self, to: &uint) -> &'a str {
-        self[][..*to]
-    }
-
-    #[inline]
-    fn slice_or_fail<'a>(&'a self, from: &uint, to: &uint) -> &'a str {
-        self[][*from..*to]
-    }
-}
-
-#[experimental = "waiting on Deref stabilization"]
-impl ops::Deref<str> for String {
-    fn deref<'a>(&'a self) -> &'a str { self.as_slice() }
 }
 
 /// Wrapper type providing a `&String` reference via `Deref`.
-#[experimental]
+#[unstable]
 pub struct DerefString<'a> {
     x: DerefVec<'a, u8>
 }
 
-impl<'a> Deref<String> for DerefString<'a> {
+impl<'a> Deref for DerefString<'a> {
+    type Target = String;
+
     fn deref<'b>(&'b self) -> &'b String {
         unsafe { mem::transmute(&*self.x) }
     }
@@ -916,7 +914,7 @@ impl<'a> Deref<String> for DerefString<'a> {
 /// let string = as_string("foo").clone();
 /// string_consumer(string);
 /// ```
-#[experimental]
+#[unstable]
 pub fn as_string<'a>(x: &'a str) -> DerefString<'a> {
     DerefString { x: as_vec(x.as_bytes()) }
 }
@@ -928,23 +926,19 @@ impl FromStr for String {
     }
 }
 
-/// Trait for converting a type to a string, consuming it in the process.
-pub trait IntoString {
-    /// Consume and convert to a string.
-    fn into_string(self) -> String;
-}
-
 /// A generic trait for converting a value to a string
 pub trait ToString {
     /// Converts the value of `self` to an owned string
     fn to_string(&self) -> String;
 }
 
-impl<T: fmt::Show> ToString for T {
+impl<T: fmt::String + ?Sized> ToString for T {
     fn to_string(&self) -> String {
-        let mut buf = Vec::<u8>::new();
-        let _ = format_args!(|args| fmt::write(&mut buf, args), "{}", self);
-        String::from_utf8(buf).unwrap()
+        use core::fmt::Writer;
+        let mut buf = String::new();
+        let _ = buf.write_fmt(format_args!("{}", self));
+        buf.shrink_to_fit();
+        buf
     }
 }
 
@@ -960,64 +954,33 @@ impl<'a> IntoCow<'a, String, str> for &'a str {
     }
 }
 
-/// Unsafe operations
-#[deprecated]
-pub mod raw {
-    use super::String;
-    use vec::Vec;
+/// A clone-on-write string
+#[stable]
+pub type CowString<'a> = Cow<'a, String, str>;
 
-    /// Creates a new `String` from a length, capacity, and pointer.
-    ///
-    /// This is unsafe because:
-    /// * We call `Vec::from_raw_parts` to get a `Vec<u8>`;
-    /// * We assume that the `Vec` contains valid UTF-8.
+impl<'a> Str for CowString<'a> {
     #[inline]
-    #[deprecated = "renamed to String::from_raw_parts"]
-    pub unsafe fn from_parts(buf: *mut u8, length: uint, capacity: uint) -> String {
-        String::from_raw_parts(buf, length, capacity)
+    fn as_slice<'b>(&'b self) -> &'b str {
+        (**self).as_slice()
     }
+}
 
-    /// Creates a `String` from a `*const u8` buffer of the given length.
-    ///
-    /// This function is unsafe because of two reasons:
-    ///
-    /// * A raw pointer is dereferenced and transmuted to `&[u8]`;
-    /// * The slice is not checked to see whether it contains valid UTF-8.
-    #[deprecated = "renamed to String::from_raw_buf_len"]
-    pub unsafe fn from_buf_len(buf: *const u8, len: uint) -> String {
-        String::from_raw_buf_len(buf, len)
-    }
-
-    /// Creates a `String` from a null-terminated `*const u8` buffer.
-    ///
-    /// This function is unsafe because we dereference memory until we find the NUL character,
-    /// which is not guaranteed to be present. Additionally, the slice is not checked to see
-    /// whether it contains valid UTF-8
-    #[deprecated = "renamed to String::from_raw_buf"]
-    pub unsafe fn from_buf(buf: *const u8) -> String {
-        String::from_raw_buf(buf)
-    }
-
-    /// Converts a vector of bytes to a new `String` without checking if
-    /// it contains valid UTF-8. This is unsafe because it assumes that
-    /// the UTF-8-ness of the vector has already been validated.
-    #[inline]
-    #[deprecated = "renamed to String::from_utf8_unchecked"]
-    pub unsafe fn from_utf8(bytes: Vec<u8>) -> String {
-        String::from_utf8_unchecked(bytes)
+impl fmt::Writer for String {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.push_str(s);
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::prelude::*;
+    use prelude::*;
     use test::Bencher;
 
-    use slice::CloneSliceAllocPrelude;
-    use str::{Str, StrPrelude};
-    use str;
-    use super::{as_string, String, ToString};
-    use vec::Vec;
+    use str::Utf8Error;
+    use core::iter::repeat;
+    use super::{as_string, CowString};
+    use core::ops::FullRange;
 
     #[test]
     fn test_as_string() {
@@ -1027,61 +990,70 @@ mod tests {
 
     #[test]
     fn test_from_str() {
-      let owned: Option<::std::string::String> = from_str("string");
+      let owned: Option<::std::string::String> = "string".parse();
       assert_eq!(owned.as_ref().map(|s| s.as_slice()), Some("string"));
+    }
+
+    #[test]
+    fn test_unsized_to_string() {
+        let s: &str = "abc";
+        let _: String = (*s).to_string();
     }
 
     #[test]
     fn test_from_utf8() {
         let xs = b"hello".to_vec();
-        assert_eq!(String::from_utf8(xs), Ok(String::from_str("hello")));
+        assert_eq!(String::from_utf8(xs).unwrap(),
+                   String::from_str("hello"));
 
         let xs = "ศไทย中华Việt Nam".as_bytes().to_vec();
-        assert_eq!(String::from_utf8(xs), Ok(String::from_str("ศไทย中华Việt Nam")));
+        assert_eq!(String::from_utf8(xs).unwrap(),
+                   String::from_str("ศไทย中华Việt Nam"));
 
         let xs = b"hello\xFF".to_vec();
-        assert_eq!(String::from_utf8(xs),
-                   Err(b"hello\xFF".to_vec()));
+        let err = String::from_utf8(xs).err().unwrap();
+        assert_eq!(err.utf8_error(), Utf8Error::TooShort);
+        assert_eq!(err.into_bytes(), b"hello\xff".to_vec());
     }
 
     #[test]
     fn test_from_utf8_lossy() {
         let xs = b"hello";
-        let ys: str::CowString = "hello".into_cow();
+        let ys: CowString = "hello".into_cow();
         assert_eq!(String::from_utf8_lossy(xs), ys);
 
         let xs = "ศไทย中华Việt Nam".as_bytes();
-        let ys: str::CowString = "ศไทย中华Việt Nam".into_cow();
+        let ys: CowString = "ศไทย中华Việt Nam".into_cow();
         assert_eq!(String::from_utf8_lossy(xs), ys);
 
         let xs = b"Hello\xC2 There\xFF Goodbye";
         assert_eq!(String::from_utf8_lossy(xs),
-                   String::from_str("Hello\uFFFD There\uFFFD Goodbye").into_cow());
+                   String::from_str("Hello\u{FFFD} There\u{FFFD} Goodbye").into_cow());
 
         let xs = b"Hello\xC0\x80 There\xE6\x83 Goodbye";
         assert_eq!(String::from_utf8_lossy(xs),
-                   String::from_str("Hello\uFFFD\uFFFD There\uFFFD Goodbye").into_cow());
+                   String::from_str("Hello\u{FFFD}\u{FFFD} There\u{FFFD} Goodbye").into_cow());
 
         let xs = b"\xF5foo\xF5\x80bar";
         assert_eq!(String::from_utf8_lossy(xs),
-                   String::from_str("\uFFFDfoo\uFFFD\uFFFDbar").into_cow());
+                   String::from_str("\u{FFFD}foo\u{FFFD}\u{FFFD}bar").into_cow());
 
         let xs = b"\xF1foo\xF1\x80bar\xF1\x80\x80baz";
         assert_eq!(String::from_utf8_lossy(xs),
-                   String::from_str("\uFFFDfoo\uFFFDbar\uFFFDbaz").into_cow());
+                   String::from_str("\u{FFFD}foo\u{FFFD}bar\u{FFFD}baz").into_cow());
 
         let xs = b"\xF4foo\xF4\x80bar\xF4\xBFbaz";
         assert_eq!(String::from_utf8_lossy(xs),
-                   String::from_str("\uFFFDfoo\uFFFDbar\uFFFD\uFFFDbaz").into_cow());
+                   String::from_str("\u{FFFD}foo\u{FFFD}bar\u{FFFD}\u{FFFD}baz").into_cow());
 
         let xs = b"\xF0\x80\x80\x80foo\xF0\x90\x80\x80bar";
-        assert_eq!(String::from_utf8_lossy(xs), String::from_str("\uFFFD\uFFFD\uFFFD\uFFFD\
-                                               foo\U00010000bar").into_cow());
+        assert_eq!(String::from_utf8_lossy(xs), String::from_str("\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\
+                                               foo\u{10000}bar").into_cow());
 
         // surrogates
         let xs = b"\xED\xA0\x80foo\xED\xBF\xBFbar";
-        assert_eq!(String::from_utf8_lossy(xs), String::from_str("\uFFFD\uFFFD\uFFFDfoo\
-                                               \uFFFD\uFFFD\uFFFDbar").into_cow());
+        assert_eq!(String::from_utf8_lossy(xs), String::from_str("\u{FFFD}\u{FFFD}\u{FFFD}foo\
+                                               \u{FFFD}\u{FFFD}\u{FFFD}bar").into_cow());
     }
 
     #[test]
@@ -1123,7 +1095,7 @@ mod tests {
                 0xd801_u16, 0xdc95_u16, 0xd801_u16, 0xdc86_u16,
                 0x000a_u16 ]),
              // Issue #12318, even-numbered non-BMP planes
-             (String::from_str("\U00020000"),
+             (String::from_str("\u{20000}"),
               vec![0xD840, 0xDC00])];
 
         for p in pairs.iter() {
@@ -1131,7 +1103,7 @@ mod tests {
             let s_as_utf16 = s.utf16_units().collect::<Vec<u16>>();
             let u_as_string = String::from_utf16(u.as_slice()).unwrap();
 
-            assert!(str::is_utf16(u.as_slice()));
+            assert!(::unicode::str::is_utf16(u.as_slice()));
             assert_eq!(s_as_utf16, u);
 
             assert_eq!(u_as_string, s);
@@ -1146,49 +1118,32 @@ mod tests {
     fn test_utf16_invalid() {
         // completely positive cases tested above.
         // lead + eof
-        assert_eq!(String::from_utf16(&[0xD800]), None);
+        assert!(String::from_utf16(&[0xD800]).is_err());
         // lead + lead
-        assert_eq!(String::from_utf16(&[0xD800, 0xD800]), None);
+        assert!(String::from_utf16(&[0xD800, 0xD800]).is_err());
 
         // isolated trail
-        assert_eq!(String::from_utf16(&[0x0061, 0xDC00]), None);
+        assert!(String::from_utf16(&[0x0061, 0xDC00]).is_err());
 
         // general
-        assert_eq!(String::from_utf16(&[0xD800, 0xd801, 0xdc8b, 0xD800]), None);
+        assert!(String::from_utf16(&[0xD800, 0xd801, 0xdc8b, 0xD800]).is_err());
     }
 
     #[test]
     fn test_from_utf16_lossy() {
         // completely positive cases tested above.
         // lead + eof
-        assert_eq!(String::from_utf16_lossy(&[0xD800]), String::from_str("\uFFFD"));
+        assert_eq!(String::from_utf16_lossy(&[0xD800]), String::from_str("\u{FFFD}"));
         // lead + lead
-        assert_eq!(String::from_utf16_lossy(&[0xD800, 0xD800]), String::from_str("\uFFFD\uFFFD"));
+        assert_eq!(String::from_utf16_lossy(&[0xD800, 0xD800]),
+                   String::from_str("\u{FFFD}\u{FFFD}"));
 
         // isolated trail
-        assert_eq!(String::from_utf16_lossy(&[0x0061, 0xDC00]), String::from_str("a\uFFFD"));
+        assert_eq!(String::from_utf16_lossy(&[0x0061, 0xDC00]), String::from_str("a\u{FFFD}"));
 
         // general
         assert_eq!(String::from_utf16_lossy(&[0xD800, 0xd801, 0xdc8b, 0xD800]),
-                   String::from_str("\uFFFD𐒋\uFFFD"));
-    }
-
-    #[test]
-    fn test_from_buf_len() {
-        unsafe {
-            let a = vec![65u8, 65, 65, 65, 65, 65, 65, 0];
-            assert_eq!(super::raw::from_buf_len(a.as_ptr(), 3), String::from_str("AAA"));
-        }
-    }
-
-    #[test]
-    fn test_from_buf() {
-        unsafe {
-            let a = vec![65, 65, 65, 65, 65, 65, 65, 0];
-            let b = a.as_ptr();
-            let c = super::raw::from_buf(b);
-            assert_eq!(c, String::from_str("AAAAAAA"));
-        }
+                   String::from_str("\u{FFFD}𐒋\u{FFFD}"));
     }
 
     #[test]
@@ -1262,7 +1217,7 @@ mod tests {
     #[test]
     #[should_fail]
     fn test_str_truncate_split_codepoint() {
-        let mut s = String::from_str("\u00FC"); // ü
+        let mut s = String::from_str("\u{FC}"); // ü
         s.truncate(1);
     }
 
@@ -1278,7 +1233,7 @@ mod tests {
     fn test_str_add() {
         let a = String::from_str("12345");
         let b = a + "2";
-        let b = b + String::from_str("2");
+        let b = b + "2";
         assert_eq!(b.len(), 7);
         assert_eq!(b, "1234522");
     }
@@ -1286,12 +1241,10 @@ mod tests {
     #[test]
     fn remove() {
         let mut s = "ศไทย中华Việt Nam; foobar".to_string();;
-        assert_eq!(s.remove(0), Some('ศ'));
+        assert_eq!(s.remove(0), 'ศ');
         assert_eq!(s.len(), 33);
         assert_eq!(s, "ไทย中华Việt Nam; foobar");
-        assert_eq!(s.remove(33), None);
-        assert_eq!(s.remove(300), None);
-        assert_eq!(s.remove(17), Some('ệ'));
+        assert_eq!(s.remove(17), 'ệ');
         assert_eq!(s, "ไทย中华Vit Nam; foobar");
     }
 
@@ -1315,10 +1268,10 @@ mod tests {
     #[test]
     fn test_slicing() {
         let s = "foobar".to_string();
-        assert_eq!("foobar", s[]);
-        assert_eq!("foo", s[..3]);
-        assert_eq!("bar", s[3..]);
-        assert_eq!("oob", s[1..4]);
+        assert_eq!("foobar", &s[]);
+        assert_eq!("foo", &s[..3]);
+        assert_eq!("bar", &s[3..]);
+        assert_eq!("oob", &s[1..4]);
     }
 
     #[test]
@@ -1329,18 +1282,17 @@ mod tests {
         assert_eq!(2u8.to_string(), "2");
         assert_eq!(true.to_string(), "true");
         assert_eq!(false.to_string(), "false");
-        assert_eq!(().to_string(), "()");
         assert_eq!(("hi".to_string()).to_string(), "hi");
     }
 
     #[test]
     fn test_vectors() {
         let x: Vec<int> = vec![];
-        assert_eq!(x.to_string(), "[]");
-        assert_eq!((vec![1i]).to_string(), "[1]");
-        assert_eq!((vec![1i, 2, 3]).to_string(), "[1, 2, 3]");
-        assert!((vec![vec![], vec![1i], vec![1i, 1]]).to_string() ==
-               "[[], [1], [1, 1]]");
+        assert_eq!(format!("{:?}", x), "[]");
+        assert_eq!(format!("{:?}", vec![1i]), "[1i]");
+        assert_eq!(format!("{:?}", vec![1i, 2, 3]), "[1i, 2i, 3i]");
+        assert!(format!("{:?}", vec![vec![], vec![1i], vec![1i, 1]]) ==
+               "[[], [1i], [1i, 1i]]");
     }
 
     #[test]
@@ -1380,6 +1332,41 @@ mod tests {
         });
     }
 
+    const REPETITIONS: u64 = 10_000;
+
+    #[bench]
+    fn bench_push_str_one_byte(b: &mut Bencher) {
+        b.bytes = REPETITIONS;
+        b.iter(|| {
+            let mut r = String::new();
+            for _ in range(0, REPETITIONS) {
+                r.push_str("a")
+            }
+        });
+    }
+
+    #[bench]
+    fn bench_push_char_one_byte(b: &mut Bencher) {
+        b.bytes = REPETITIONS;
+        b.iter(|| {
+            let mut r = String::new();
+            for _ in range(0, REPETITIONS) {
+                r.push('a')
+            }
+        });
+    }
+
+    #[bench]
+    fn bench_push_char_two_bytes(b: &mut Bencher) {
+        b.bytes = REPETITIONS * 2;
+        b.iter(|| {
+            let mut r = String::new();
+            for _ in range(0, REPETITIONS) {
+                r.push('â')
+            }
+        });
+    }
+
     #[bench]
     fn from_utf8_lossy_100_ascii(b: &mut Bencher) {
         let s = b"Hello there, the quick brown fox jumped over the lazy dog! \
@@ -1410,7 +1397,7 @@ mod tests {
 
     #[bench]
     fn from_utf8_lossy_100_invalid(b: &mut Bencher) {
-        let s = Vec::from_elem(100, 0xF5u8);
+        let s = repeat(0xf5u8).take(100).collect::<Vec<_>>();
         b.iter(|| {
             let _ = String::from_utf8_lossy(s.as_slice());
         });

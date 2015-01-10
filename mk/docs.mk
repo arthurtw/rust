@@ -9,7 +9,7 @@
 # except according to those terms.
 
 ######################################################################
-# The various pieces of standalone documentation: guides, manual, etc
+# The various pieces of standalone documentation.
 #
 # The DOCS variable is their names (with no file extension).
 #
@@ -25,13 +25,11 @@
 # L10N_LANGS are the languages for which the docs have been
 # translated.
 ######################################################################
-DOCS := index intro tutorial guide guide-ffi guide-macros guide-ownership \
-	guide-tasks guide-container guide-pointers guide-testing \
-	guide-plugin guide-crates complement-bugreport guide-error-handling \
-	complement-lang-faq complement-design-faq complement-project-faq \
-    rustdoc guide-unsafe guide-strings reference
+DOCS := index intro tutorial complement-bugreport \
+    complement-lang-faq complement-design-faq complement-project-faq \
+    rustdoc reference
 
-PDF_DOCS := guide reference
+PDF_DOCS := reference
 
 RUSTDOC_DEPS_reference := doc/full-toc.inc
 RUSTDOC_FLAGS_reference := --html-in-header=doc/full-toc.inc
@@ -49,8 +47,10 @@ RUSTDOC_HTML_OPTS_NO_CSS = --html-before-content=doc/version_info.html \
 RUSTDOC_HTML_OPTS = $(RUSTDOC_HTML_OPTS_NO_CSS) --markdown-css rust.css
 
 PANDOC_BASE_OPTS := --standalone --toc --number-sections
-PANDOC_TEX_OPTS = $(PANDOC_BASE_OPTS) --include-before-body=doc/version.tex \
-	--from=markdown --include-before-body=doc/footer.tex --to=latex
+PANDOC_TEX_OPTS = $(PANDOC_BASE_OPTS) --from=markdown --to=latex \
+	--include-before-body=doc/version.tex \
+	--include-before-body=doc/footer.tex \
+	--include-in-header=doc/uptack.tex
 PANDOC_EPUB_OPTS = $(PANDOC_BASE_OPTS) --to=epub
 
 # The rustdoc executable...
@@ -59,9 +59,15 @@ RUSTDOC_EXE = $(HBIN2_H_$(CFG_BUILD))/rustdoc$(X_$(CFG_BUILD))
 # ./configure
 RUSTDOC = $(RPATH_VAR2_T_$(CFG_BUILD)_H_$(CFG_BUILD)) $(RUSTDOC_EXE)
 
+# The rustbook executable...
+RUSTBOOK_EXE = $(HBIN2_H_$(CFG_BUILD))/rustbook$(X_$(CFG_BUILD))
+# ...with rpath included in case --disable-rpath was provided to
+# ./configure
+RUSTBOOK = $(RPATH_VAR2_T_$(CFG_BUILD)_H_$(CFG_BUILD)) $(RUSTBOOK_EXE)
+
 D := $(S)src/doc
 
-DOC_TARGETS :=
+DOC_TARGETS := trpl
 COMPILER_DOC_TARGETS :=
 DOC_L10N_TARGETS :=
 
@@ -155,6 +161,9 @@ doc/footer.tex: $(D)/footer.inc | doc/
 	@$(call E, pandoc: $@)
 	$(CFG_PANDOC) --from=html --to=latex $< --output=$@
 
+doc/uptack.tex: $(D)/uptack.tex | doc/
+	$(Q)cp $< $@
+
 # HTML (rustdoc)
 DOC_TARGETS += doc/not_found.html
 doc/not_found.html: $(D)/not_found.md $(HTML_DEPS) | doc/
@@ -180,7 +189,7 @@ doc/$(1).epub: $$(D)/$(1).md | doc/
 
 # PDF (md =(pandoc)=> tex =(pdflatex)=> pdf)
 DOC_TARGETS += doc/$(1).tex
-doc/$(1).tex: $$(D)/$(1).md doc/footer.tex doc/version.tex | doc/
+doc/$(1).tex: $$(D)/$(1).md doc/uptack.tex doc/footer.tex doc/version.tex | doc/
 	@$$(call E, pandoc: $$@)
 	$$(CFG_PANDOC) $$(PANDOC_TEX_OPTS) $$< --output=$$@
 
@@ -216,36 +225,6 @@ endef
 $(foreach docname,$(DOCS),$(eval $(call DEF_DOC,$(docname))))
 
 
-# Localized documentation
-
-# FIXME: I (huonw) haven't actually been able to test properly, since
-# e.g. (by default) I'm doing an out-of-tree build (#12763), but even
-# adjusting for that, the files are too old(?) and are rejected by
-# po4a.
-#
-# As such, I've attempted to get it working as much as possible (and
-# switching from pandoc to rustdoc), but preserving the old behaviour
-# (e.g. only running on the guide)
-.PHONY: l10n-mds
-l10n-mds: $(D)/po4a.conf \
-		$(foreach lang,$(L10N_LANG),$(D)/po/$(lang)/*.md.po)
-	$(warning WARNING: localized documentation is experimental)
-	po4a --copyright-holder="The Rust Project Developers" \
-		--package-name="Rust" \
-		--package-version="$(CFG_RELEASE)" \
-		-M UTF-8 -L UTF-8 \
-		$(D)/po4a.conf
-
-define DEF_L10N_DOC
-DOC_L10N_TARGETS += doc/l10n/$(1)/$(2).html
-doc/l10n/$(1)/$(2).html: l10n-mds $$(HTML_DEPS) $$(RUSTDOC_DEPS_$(2))
-	@$$(call E, rustdoc: $$@)
-	$$(RUSTDOC) $$(RUSTDOC_HTML_OPTS) $$(RUSTDOC_FLAGS_$(1)) doc/l10n/$(1)/$(2).md
-endef
-
-$(foreach lang,$(L10N_LANGS),$(eval $(call DEF_L10N_DOC,$(lang),guide)))
-
-
 ######################################################################
 # Rustdoc (libstd/extra)
 ######################################################################
@@ -266,7 +245,8 @@ LIB_DOC_DEP_$(1) = \
 	$$(RSINPUTS_$(1)) \
 	$$(RUSTDOC_EXE) \
 	$$(foreach dep,$$(RUST_DEPS_$(1)), \
-		$$(TLIB2_T_$(CFG_BUILD)_H_$(CFG_BUILD))/stamp.$$(dep) \
+		$$(TLIB2_T_$(CFG_BUILD)_H_$(CFG_BUILD))/stamp.$$(dep)) \
+	$$(foreach dep,$$(filter $$(DOC_CRATES), $$(RUST_DEPS_$(1))), \
 		doc/$$(dep)/)
 else
 LIB_DOC_DEP_$(1) = $$(CRATEFILE_$(1)) $$(RSINPUTS_$(1))
@@ -295,6 +275,8 @@ endif
 docs: $(DOC_TARGETS)
 compiler-docs: $(COMPILER_DOC_TARGETS)
 
-docs-l10n: $(DOC_L10N_TARGETS)
+trpl: doc/book/index.html
 
-.PHONY: docs-l10n
+doc/book/index.html: $(RUSTBOOK_EXE) $(wildcard $(S)/src/doc/trpl/*.md)
+	$(Q)rm -rf doc/book
+	$(Q)$(RUSTBOOK) build $(S)src/doc/trpl doc/book

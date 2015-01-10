@@ -8,13 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::task;
+use std::thread::Thread;
+use std::sync::mpsc::{channel, Sender};
 
 pub fn main() { test00(); }
 
 fn test00_start(c: &Sender<int>, number_of_messages: int) {
     let mut i: int = 0;
-    while i < number_of_messages { c.send(i + 0); i += 1; }
+    while i < number_of_messages { c.send(i + 0).unwrap(); i += 1; }
 }
 
 fn test00() {
@@ -23,18 +24,18 @@ fn test00() {
     let (tx, rx) = channel();
     let number_of_messages: int = 10;
 
-    let result = task::try_future(proc() {
+    let result = Thread::scoped(move|| {
         test00_start(&tx, number_of_messages);
     });
 
     let mut i: int = 0;
     while i < number_of_messages {
-        sum += rx.recv();
+        sum += rx.recv().unwrap();
         println!("{}", r);
         i += 1;
     }
 
-    result.unwrap();
+    result.join();
 
     assert_eq!(sum, number_of_messages * (number_of_messages - 1) / 2);
 }

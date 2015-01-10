@@ -15,15 +15,17 @@
 #![allow(unused_unsafe)]
 #![allow(unused_mut)]
 
-extern crate libc;
+use prelude::v1::*;
 
-use num;
+use ffi;
+use io::{self, IoResult, IoError};
+use libc;
 use num::{Int, SignedInt};
-use prelude::*;
-use io::{mod, IoResult, IoError};
+use num;
+use str;
 use sys_common::mkerr_libc;
 
-macro_rules! helper_init( (static $name:ident: Helper<$m:ty>) => (
+macro_rules! helper_init { (static $name:ident: Helper<$m:ty>) => (
     static $name: Helper<$m> = Helper {
         lock: ::sync::MUTEX_INIT,
         cond: ::sync::CONDVAR_INIT,
@@ -32,8 +34,9 @@ macro_rules! helper_init( (static $name:ident: Helper<$m:ty>) => (
         initialized: ::cell::UnsafeCell { value: false },
         shutdown: ::cell::UnsafeCell { value: false },
     };
-) )
+) }
 
+pub mod backtrace;
 pub mod c;
 pub mod ext;
 pub mod condvar;
@@ -44,8 +47,10 @@ pub mod os;
 pub mod pipe;
 pub mod process;
 pub mod rwlock;
+pub mod stack_overflow;
 pub mod sync;
 pub mod tcp;
+pub mod thread;
 pub mod thread_local;
 pub mod timer;
 pub mod tty;
@@ -53,6 +58,7 @@ pub mod udp;
 
 pub mod addrinfo {
     pub use sys_common::net::get_host_addresses;
+    pub use sys_common::net::get_address_name;
 }
 
 // FIXME: move these to c module
@@ -74,11 +80,10 @@ extern "system" {
 }
 
 pub fn last_gai_error(s: libc::c_int) -> IoError {
-    use c_str::CString;
 
     let mut err = decode_error(s);
     err.detail = Some(unsafe {
-        CString::new(gai_strerror(s), false).as_str().unwrap().to_string()
+        str::from_utf8(ffi::c_str_to_bytes(&gai_strerror(s))).unwrap().to_string()
     });
     err
 }
@@ -106,6 +111,8 @@ pub fn decode_error(errno: i32) -> IoError {
              "file descriptor is not a TTY"),
         libc::ETIMEDOUT => (io::TimedOut, "operation timed out"),
         libc::ECANCELED => (io::TimedOut, "operation aborted"),
+        libc::consts::os::posix88::EEXIST =>
+            (io::PathAlreadyExists, "path already exists"),
 
         // These two constants can have the same value on some systems,
         // but different values on others, so we can't use a match
@@ -125,7 +132,10 @@ pub fn decode_error_detailed(errno: i32) -> IoError {
 }
 
 #[inline]
-pub fn retry<T: SignedInt> (f: || -> T) -> T {
+pub fn retry<T, F> (mut f: F) -> T where
+    T: SignedInt,
+    F: FnMut() -> T,
+{
     let one: T = Int::one();
     loop {
         let n = f();

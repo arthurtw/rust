@@ -12,7 +12,7 @@ use clean::*;
 use std::iter::Extend;
 use std::mem::{replace, swap};
 
-pub trait DocFolder {
+pub trait DocFolder : Sized {
     fn fold_item(&mut self, item: Item) -> Option<Item> {
         self.fold_item_recur(item)
     }
@@ -79,8 +79,7 @@ pub trait DocFolder {
                     StructVariant(mut j) => {
                         let mut foo = Vec::new(); swap(&mut foo, &mut j.fields);
                         let num_fields = foo.len();
-                        let c = |x| self.fold_item(x);
-                        j.fields.extend(foo.into_iter().filter_map(c));
+                        j.fields.extend(foo.into_iter().filter_map(|x| self.fold_item(x)));
                         j.fields_stripped |= num_fields != j.fields.len();
                         VariantItem(Variant {kind: StructVariant(j), ..i2})
                     },

@@ -41,14 +41,17 @@
 // ignore-stage1
 // ignore-cross-compile #12102
 
-#![feature(macro_rules, phase, slicing_syntax)]
+#![feature(box_syntax)]
 
 extern crate regex;
-#[phase(plugin)]extern crate regex_macros;
 
 use std::io;
 use regex::{NoExpand, Regex};
 use std::sync::{Arc, Future};
+
+macro_rules! regex {
+    ($e:expr) => (Regex::new($e).unwrap())
+}
 
 fn count_matches(seq: &str, variant: &Regex) -> int {
     let mut n = 0;
@@ -72,7 +75,7 @@ fn main() {
     let seq_arc = Arc::new(seq.clone()); // copy before it moves
     let clen = seq.len();
 
-    let mut seqlen = Future::spawn(proc() {
+    let mut seqlen = Future::spawn(move|| {
         let substs = vec![
             (regex!("B"), "(c|g|t)"),
             (regex!("D"), "(a|g|t)"),
@@ -108,7 +111,7 @@ fn main() {
     for variant in variants.into_iter() {
         let seq_arc_copy = seq_arc.clone();
         variant_strs.push(variant.to_string());
-        counts.push(Future::spawn(proc() {
+        counts.push(Future::spawn(move|| {
             count_matches(seq_arc_copy.as_slice(), &variant)
         }));
     }

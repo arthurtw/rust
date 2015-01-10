@@ -9,8 +9,9 @@
 // except according to those terms.
 #![allow(non_snake_case)]
 
-use std::rand::{Rng, task_rng};
+use std::rand::{Rng, thread_rng};
 use stdtest::Bencher;
+use std::iter::repeat;
 
 use regex::{Regex, NoExpand};
 
@@ -22,30 +23,30 @@ fn bench_assert_match(b: &mut Bencher, re: Regex, text: &str) {
 fn no_exponential(b: &mut Bencher) {
     let n = 100;
     let re = Regex::new(format!("{}{}",
-                                "a?".repeat(n),
-                                "a".repeat(n)).as_slice()).unwrap();
-    let text = "a".repeat(n);
+                                repeat("a?").take(n).collect::<String>(),
+                                repeat("a").take(n).collect::<String>()).as_slice()).unwrap();
+    let text = repeat("a").take(n).collect::<String>();
     bench_assert_match(b, re, text.as_slice());
 }
 
 #[bench]
 fn literal(b: &mut Bencher) {
     let re = regex!("y");
-    let text = format!("{}y", "x".repeat(50));
+    let text = format!("{}y", repeat("x").take(50).collect::<String>());
     bench_assert_match(b, re, text.as_slice());
 }
 
 #[bench]
 fn not_literal(b: &mut Bencher) {
     let re = regex!(".y");
-    let text = format!("{}y", "x".repeat(50));
+    let text = format!("{}y", repeat("x").take(50).collect::<String>());
     bench_assert_match(b, re, text.as_slice());
 }
 
 #[bench]
 fn match_class(b: &mut Bencher) {
     let re = regex!("[abcdw]");
-    let text = format!("{}w", "xxxx".repeat(20));
+    let text = format!("{}w", repeat("xxxx").take(20).collect::<String>());
     bench_assert_match(b, re, text.as_slice());
 }
 
@@ -53,7 +54,7 @@ fn match_class(b: &mut Bencher) {
 fn match_class_in_range(b: &mut Bencher) {
     // 'b' is between 'a' and 'c', so the class range checking doesn't help.
     let re = regex!("[ac]");
-    let text = format!("{}c", "bbbb".repeat(20));
+    let text = format!("{}c", repeat("bbbb").take(20).collect::<String>());
     bench_assert_match(b, re, text.as_slice());
 }
 
@@ -77,7 +78,7 @@ fn anchored_literal_short_non_match(b: &mut Bencher) {
 #[bench]
 fn anchored_literal_long_non_match(b: &mut Bencher) {
     let re = regex!("^zbc(d|e)");
-    let text = "abcdefghijklmnopqrstuvwxyz".repeat(15);
+    let text = repeat("abcdefghijklmnopqrstuvwxyz").take(15).collect::<String>();
     b.iter(|| re.is_match(text.as_slice()));
 }
 
@@ -91,7 +92,7 @@ fn anchored_literal_short_match(b: &mut Bencher) {
 #[bench]
 fn anchored_literal_long_match(b: &mut Bencher) {
     let re = regex!("^.bc(d|e)");
-    let text = "abcdefghijklmnopqrstuvwxyz".repeat(15);
+    let text = repeat("abcdefghijklmnopqrstuvwxyz").take(15).collect::<String>();
     b.iter(|| re.is_match(text.as_slice()));
 }
 
@@ -137,7 +138,7 @@ fn one_pass_long_prefix_not(b: &mut Bencher) {
     b.iter(|| re.is_match(text));
 }
 
-macro_rules! throughput(
+macro_rules! throughput {
     ($name:ident, $regex:expr, $size:expr) => (
         #[bench]
         fn $name(b: &mut Bencher) {
@@ -146,7 +147,7 @@ macro_rules! throughput(
             b.iter(|| if $regex.is_match(text.as_slice()) { panic!("match") });
         }
     );
-)
+}
 
 fn easy0() -> Regex { regex!("ABCDEFGHIJKLMNOPQRSTUVWXYZ$") }
 fn easy1() -> Regex { regex!("A[AB]B[BC]C[CD]D[DE]E[EF]F[FG]G[GH]H[HI]I[IJ]J$") }
@@ -154,7 +155,7 @@ fn medium() -> Regex { regex!("[XYZ]ABCDEFGHIJKLMNOPQRSTUVWXYZ$") }
 fn hard() -> Regex { regex!("[ -~]*ABCDEFGHIJKLMNOPQRSTUVWXYZ$") }
 
 fn gen_text(n: uint) -> String {
-    let mut rng = task_rng();
+    let mut rng = thread_rng();
     let mut bytes = rng.gen_ascii_chars().map(|n| n as u8).take(n)
                        .collect::<Vec<u8>>();
     for (i, b) in bytes.iter_mut().enumerate() {
@@ -165,18 +166,18 @@ fn gen_text(n: uint) -> String {
     String::from_utf8(bytes).unwrap()
 }
 
-throughput!(easy0_32, easy0(), 32)
-throughput!(easy0_1K, easy0(), 1<<10)
-throughput!(easy0_32K, easy0(), 32<<10)
+throughput!{easy0_32, easy0(), 32}
+throughput!{easy0_1K, easy0(), 1<<10}
+throughput!{easy0_32K, easy0(), 32<<10}
 
-throughput!(easy1_32, easy1(), 32)
-throughput!(easy1_1K, easy1(), 1<<10)
-throughput!(easy1_32K, easy1(), 32<<10)
+throughput!{easy1_32, easy1(), 32}
+throughput!{easy1_1K, easy1(), 1<<10}
+throughput!{easy1_32K, easy1(), 32<<10}
 
-throughput!(medium_32, medium(), 32)
-throughput!(medium_1K, medium(), 1<<10)
-throughput!(medium_32K,medium(), 32<<10)
+throughput!{medium_32, medium(), 32}
+throughput!{medium_1K, medium(), 1<<10}
+throughput!{medium_32K,medium(), 32<<10}
 
-throughput!(hard_32, hard(), 32)
-throughput!(hard_1K, hard(), 1<<10)
-throughput!(hard_32K,hard(), 32<<10)
+throughput!{hard_32, hard(), 32}
+throughput!{hard_1K, hard(), 1<<10}
+throughput!{hard_32K,hard(), 32<<10}

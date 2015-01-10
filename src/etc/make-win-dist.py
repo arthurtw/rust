@@ -107,18 +107,12 @@ def make_win_dist(rust_root, gcc_root, target_triple):
     for src in target_tools:
         shutil.copy(src, target_bin_dir)
 
-    # Copy platform libs to platform-spcific lib directory
+    # Copy platform libs to platform-specific lib directory
     target_lib_dir = os.path.join(gcc_root, "bin", "rustlib", target_triple, "lib")
     if not os.path.exists(target_lib_dir):
         os.makedirs(target_lib_dir)
     for src in target_libs:
         shutil.copy(src, target_lib_dir)
-
-    # Copy license files
-    lic_dir = os.path.join(rust_root, "bin", "third-party")
-    if os.path.exists(lic_dir):
-        shutil.rmtree(lic_dir) # copytree() won't overwrite existing files
-    shutil.copytree(os.path.join(os.path.dirname(__file__), "third-party"), lic_dir)
 
 if __name__=="__main__":
     make_win_dist(sys.argv[1], sys.argv[2], sys.argv[3])

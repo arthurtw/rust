@@ -34,6 +34,7 @@
 
 use std::fmt::{Formatter, Error, Show};
 use std::uint;
+use std::collections::BitvSet;
 
 pub struct Graph<N,E> {
     nodes: Vec<Node<N>> ,
@@ -41,12 +42,12 @@ pub struct Graph<N,E> {
 }
 
 pub struct Node<N> {
-    first_edge: [EdgeIndex, ..2], // see module comment
+    first_edge: [EdgeIndex; 2], // see module comment
     pub data: N,
 }
 
 pub struct Edge<E> {
-    next_edge: [EdgeIndex, ..2], // see module comment
+    next_edge: [EdgeIndex; 2], // see module comment
     source: NodeIndex,
     target: NodeIndex,
     pub data: E,
@@ -54,35 +55,29 @@ pub struct Edge<E> {
 
 impl<E: Show> Show for Edge<E> {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
-        write!(f, "Edge {{ next_edge: [{}, {}], source: {}, target: {}, data: {} }}",
+        write!(f, "Edge {{ next_edge: [{:?}, {:?}], source: {:?}, target: {:?}, data: {:?} }}",
                self.next_edge[0], self.next_edge[1], self.source,
                self.target, self.data)
     }
 }
 
-#[deriving(Clone, PartialEq, Show)]
+#[derive(Clone, Copy, PartialEq, Show)]
 pub struct NodeIndex(pub uint);
 #[allow(non_upper_case_globals)]
 pub const InvalidNodeIndex: NodeIndex = NodeIndex(uint::MAX);
 
-impl Copy for NodeIndex {}
-
-#[deriving(PartialEq, Show)]
+#[derive(Copy, PartialEq, Show)]
 pub struct EdgeIndex(pub uint);
 #[allow(non_upper_case_globals)]
 pub const InvalidEdgeIndex: EdgeIndex = EdgeIndex(uint::MAX);
 
-impl Copy for EdgeIndex {}
-
 // Use a private field here to guarantee no more instances are created:
-#[deriving(Show)]
+#[derive(Copy, Show)]
 pub struct Direction { repr: uint }
 #[allow(non_upper_case_globals)]
 pub const Outgoing: Direction = Direction { repr: 0 };
 #[allow(non_upper_case_globals)]
 pub const Incoming: Direction = Direction { repr: 1 };
-
-impl Copy for Direction {}
 
 impl NodeIndex {
     fn get(&self) -> uint { let NodeIndex(v) = *self; v }
@@ -221,39 +216,43 @@ impl<N,E> Graph<N,E> {
     ///////////////////////////////////////////////////////////////////////////
     // Iterating over nodes, edges
 
-    pub fn each_node<'a>(&'a self, f: |NodeIndex, &'a Node<N>| -> bool) -> bool {
+    pub fn each_node<'a, F>(&'a self, mut f: F) -> bool where
+        F: FnMut(NodeIndex, &'a Node<N>) -> bool,
+    {
         //! Iterates over all edges defined in the graph.
         self.nodes.iter().enumerate().all(|(i, node)| f(NodeIndex(i), node))
     }
 
-    pub fn each_edge<'a>(&'a self, f: |EdgeIndex, &'a Edge<E>| -> bool) -> bool {
+    pub fn each_edge<'a, F>(&'a self, mut f: F) -> bool where
+        F: FnMut(EdgeIndex, &'a Edge<E>) -> bool,
+    {
         //! Iterates over all edges defined in the graph
         self.edges.iter().enumerate().all(|(i, edge)| f(EdgeIndex(i), edge))
     }
 
-    pub fn each_outgoing_edge<'a>(&'a self,
-                                  source: NodeIndex,
-                                  f: |EdgeIndex, &'a Edge<E>| -> bool)
-                                  -> bool {
+    pub fn each_outgoing_edge<'a, F>(&'a self, source: NodeIndex, f: F) -> bool where
+        F: FnMut(EdgeIndex, &'a Edge<E>) -> bool,
+    {
         //! Iterates over all outgoing edges from the node `from`
 
         self.each_adjacent_edge(source, Outgoing, f)
     }
 
-    pub fn each_incoming_edge<'a>(&'a self,
-                                  target: NodeIndex,
-                                  f: |EdgeIndex, &'a Edge<E>| -> bool)
-                                  -> bool {
+    pub fn each_incoming_edge<'a, F>(&'a self, target: NodeIndex, f: F) -> bool where
+        F: FnMut(EdgeIndex, &'a Edge<E>) -> bool,
+    {
         //! Iterates over all incoming edges to the node `target`
 
         self.each_adjacent_edge(target, Incoming, f)
     }
 
-    pub fn each_adjacent_edge<'a>(&'a self,
-                                  node: NodeIndex,
-                                  dir: Direction,
-                                  f: |EdgeIndex, &'a Edge<E>| -> bool)
-                                  -> bool {
+    pub fn each_adjacent_edge<'a, F>(&'a self,
+                                     node: NodeIndex,
+                                     dir: Direction,
+                                     mut f: F)
+                                     -> bool where
+        F: FnMut(EdgeIndex, &'a Edge<E>) -> bool,
+    {
         //! Iterates over all edges adjacent to the node `node`
         //! in the direction `dir` (either `Outgoing` or `Incoming)
 
@@ -277,11 +276,9 @@ impl<N,E> Graph<N,E> {
     // variables or other bitsets. This method facilitates such a
     // computation.
 
-    pub fn iterate_until_fixed_point<'a>(&'a self,
-                                         op: |iter_index: uint,
-                                              edge_index: EdgeIndex,
-                                              edge: &'a Edge<E>|
-                                              -> bool) {
+    pub fn iterate_until_fixed_point<'a, F>(&'a self, mut op: F) where
+        F: FnMut(uint, EdgeIndex, &'a Edge<E>) -> bool,
+    {
         let mut iteration = 0;
         let mut changed = true;
         while changed {
@@ -292,9 +289,47 @@ impl<N,E> Graph<N,E> {
             }
         }
     }
+
+    pub fn depth_traverse<'a>(&'a self, start: NodeIndex) -> DepthFirstTraversal<'a, N, E>  {
+        DepthFirstTraversal {
+            graph: self,
+            stack: vec![start],
+            visited: BitvSet::new()
+        }
+    }
 }
 
-pub fn each_edge_index(max_edge_index: EdgeIndex, f: |EdgeIndex| -> bool) {
+pub struct DepthFirstTraversal<'g, N:'g, E:'g> {
+    graph: &'g Graph<N, E>,
+    stack: Vec<NodeIndex>,
+    visited: BitvSet
+}
+
+impl<'g, N, E> Iterator for DepthFirstTraversal<'g, N, E> {
+    type Item = &'g N;
+
+    fn next(&mut self) -> Option<&'g N> {
+        while let Some(idx) = self.stack.pop() {
+            if !self.visited.insert(idx.node_id()) {
+                continue;
+            }
+            self.graph.each_outgoing_edge(idx, |_, e| -> bool {
+                if !self.visited.contains(&e.target().node_id()) {
+                    self.stack.push(e.target());
+                }
+                true
+            });
+
+            return Some(self.graph.node_data(idx));
+        }
+
+        return None;
+    }
+}
+
+pub fn each_edge_index<F>(max_edge_index: EdgeIndex, mut f: F) where
+    F: FnMut(EdgeIndex) -> bool,
+{
     let mut i = 0;
     let n = max_edge_index.get();
     while i < n {
@@ -384,7 +419,7 @@ mod test {
         graph.each_incoming_edge(start_index, |edge_index, edge| {
             assert!(graph.edge_data(edge_index) == &edge.data);
             assert!(counter < expected_incoming.len());
-            debug!("counter={} expected={} edge_index={} edge={}",
+            debug!("counter={:?} expected={:?} edge_index={:?} edge={:?}",
                    counter, expected_incoming[counter], edge_index, edge);
             match expected_incoming[counter] {
                 (ref e, ref n) => {
@@ -402,7 +437,7 @@ mod test {
         graph.each_outgoing_edge(start_index, |edge_index, edge| {
             assert!(graph.edge_data(edge_index) == &edge.data);
             assert!(counter < expected_outgoing.len());
-            debug!("counter={} expected={} edge_index={} edge={}",
+            debug!("counter={:?} expected={:?} edge_index={:?} edge={:?}",
                    counter, expected_outgoing[counter], edge_index, edge);
             match expected_outgoing[counter] {
                 (ref e, ref n) => {

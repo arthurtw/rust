@@ -20,16 +20,16 @@
 //! can be created in the future and there must be no active timers at that
 //! time.
 
-use prelude::*;
+use prelude::v1::*;
 
 use cell::UnsafeCell;
 use mem;
-use rustrt::bookkeeping;
-use rustrt;
+use rt;
 use sync::{StaticMutex, StaticCondvar};
+use sync::mpsc::{channel, Sender, Receiver};
 use sys::helper_signal;
 
-use task;
+use thread::Thread;
 
 /// A structure for management of a helper thread.
 ///
@@ -60,6 +60,15 @@ pub struct Helper<M> {
     pub shutdown: UnsafeCell<bool>,
 }
 
+unsafe impl<M:Send> Send for Helper<M> { }
+
+unsafe impl<M:Send> Sync for Helper<M> { }
+
+struct RaceBox(helper_signal::signal);
+
+unsafe impl Send for RaceBox {}
+unsafe impl Sync for RaceBox {}
+
 impl<M: Send> Helper<M> {
     /// Lazily boots a helper thread, becoming a no-op if the helper has already
     /// been spawned.
@@ -70,27 +79,29 @@ impl<M: Send> Helper<M> {
     /// passed to the helper thread in a separate task.
     ///
     /// This function is safe to be called many times.
-    pub fn boot<T: Send>(&'static self,
-                         f: || -> T,
-                         helper: fn(helper_signal::signal, Receiver<M>, T)) {
+    pub fn boot<T, F>(&'static self, f: F, helper: fn(helper_signal::signal, Receiver<M>, T)) where
+        T: Send,
+        F: FnOnce() -> T,
+    {
         unsafe {
-            let _guard = self.lock.lock();
+            let _guard = self.lock.lock().unwrap();
             if !*self.initialized.get() {
                 let (tx, rx) = channel();
                 *self.chan.get() = mem::transmute(box tx);
                 let (receive, send) = helper_signal::new();
                 *self.signal.get() = send as uint;
 
+                let receive = RaceBox(receive);
+
                 let t = f();
-                task::spawn(proc() {
-                    bookkeeping::decrement();
-                    helper(receive, rx, t);
-                    let _g = self.lock.lock();
+                Thread::spawn(move |:| {
+                    helper(receive.0, rx, t);
+                    let _g = self.lock.lock().unwrap();
                     *self.shutdown.get() = true;
                     self.cond.notify_one()
                 });
 
-                rustrt::at_exit(proc() { self.shutdown() });
+                rt::at_exit(move|:| { self.shutdown() });
                 *self.initialized.get() = true;
             }
         }
@@ -101,13 +112,13 @@ impl<M: Send> Helper<M> {
     /// This is only valid if the worker thread has previously booted
     pub fn send(&'static self, msg: M) {
         unsafe {
-            let _guard = self.lock.lock();
+            let _guard = self.lock.lock().unwrap();
 
             // Must send and *then* signal to ensure that the child receives the
             // message. Otherwise it could wake up and go to sleep before we
             // send the message.
             assert!(!self.chan.get().is_null());
-            (**self.chan.get()).send(msg);
+            (**self.chan.get()).send(msg).unwrap();
             helper_signal::signal(*self.signal.get() as helper_signal::signal);
         }
     }
@@ -117,7 +128,7 @@ impl<M: Send> Helper<M> {
             // Shut down, but make sure this is done inside our lock to ensure
             // that we'll always receive the exit signal when the thread
             // returns.
-            let guard = self.lock.lock();
+            let mut guard = self.lock.lock().unwrap();
 
             // Close the channel by destroying it
             let chan: Box<Sender<M>> = mem::transmute(*self.chan.get());
@@ -127,7 +138,7 @@ impl<M: Send> Helper<M> {
 
             // Wait for the child to exit
             while !*self.shutdown.get() {
-                self.cond.wait(&guard);
+                guard = self.cond.wait(guard).unwrap();
             }
             drop(guard);
 

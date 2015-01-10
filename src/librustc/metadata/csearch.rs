@@ -19,9 +19,7 @@ use metadata::cstore;
 use metadata::decoder;
 use middle::def;
 use middle::lang_items;
-use middle::resolve;
 use middle::ty;
-use middle::subst::VecPerParamSpace;
 
 use rbml;
 use rbml::reader;
@@ -29,18 +27,18 @@ use std::rc::Rc;
 use syntax::ast;
 use syntax::ast_map;
 use syntax::attr;
+use syntax::attr::AttrMetaMethods;
 use syntax::diagnostic::expect;
 use syntax::parse::token;
 
 use std::collections::hash_map::HashMap;
 
+#[derive(Copy)]
 pub struct MethodInfo {
     pub name: ast::Name,
     pub def_id: ast::DefId,
     pub vis: ast::Visibility,
 }
-
-impl Copy for MethodInfo {}
 
 pub fn get_symbol(cstore: &cstore::CStore, def: ast::DefId) -> String {
     let cdata = cstore.get_crate_data(def.krate);
@@ -48,22 +46,24 @@ pub fn get_symbol(cstore: &cstore::CStore, def: ast::DefId) -> String {
 }
 
 /// Iterates over all the language items in the given crate.
-pub fn each_lang_item(cstore: &cstore::CStore,
-                      cnum: ast::CrateNum,
-                      f: |ast::NodeId, uint| -> bool)
-                      -> bool {
+pub fn each_lang_item<F>(cstore: &cstore::CStore,
+                         cnum: ast::CrateNum,
+                         f: F)
+                         -> bool where
+    F: FnMut(ast::NodeId, uint) -> bool,
+{
     let crate_data = cstore.get_crate_data(cnum);
     decoder::each_lang_item(&*crate_data, f)
 }
 
 /// Iterates over each child of the given item.
-pub fn each_child_of_item(cstore: &cstore::CStore,
-                          def_id: ast::DefId,
-                          callback: |decoder::DefLike,
-                                     ast::Name,
-                                     ast::Visibility|) {
+pub fn each_child_of_item<F>(cstore: &cstore::CStore,
+                             def_id: ast::DefId,
+                             callback: F) where
+    F: FnMut(decoder::DefLike, ast::Name, ast::Visibility),
+{
     let crate_data = cstore.get_crate_data(def_id.krate);
-    let get_crate_data: decoder::GetCrateDataCb = |cnum| {
+    let get_crate_data = |&mut: cnum| {
         cstore.get_crate_data(cnum)
     };
     decoder::each_child_of_item(cstore.intr.clone(),
@@ -74,13 +74,13 @@ pub fn each_child_of_item(cstore: &cstore::CStore,
 }
 
 /// Iterates over each top-level crate item.
-pub fn each_top_level_item_of_crate(cstore: &cstore::CStore,
-                                    cnum: ast::CrateNum,
-                                    callback: |decoder::DefLike,
-                                               ast::Name,
-                                               ast::Visibility|) {
+pub fn each_top_level_item_of_crate<F>(cstore: &cstore::CStore,
+                                       cnum: ast::CrateNum,
+                                       callback: F) where
+    F: FnMut(decoder::DefLike, ast::Name, ast::Visibility),
+{
     let crate_data = cstore.get_crate_data(cnum);
-    let get_crate_data: decoder::GetCrateDataCb = |cnum| {
+    let get_crate_data = |&mut: cnum| {
         cstore.get_crate_data(cnum)
     };
     decoder::each_top_level_item_of_crate(cstore.intr.clone(),
@@ -96,7 +96,7 @@ pub fn get_item_path(tcx: &ty::ctxt, def: ast::DefId) -> Vec<ast_map::PathElem> 
 
     // FIXME #1920: This path is not always correct if the crate is not linked
     // into the root namespace.
-    let mut r = vec![ast_map::PathMod(token::intern(cdata.name.as_slice()))];
+    let mut r = vec![ast_map::PathMod(token::intern(&cdata.name[]))];
     r.push_all(path.as_slice());
     r
 }
@@ -147,8 +147,15 @@ pub fn get_impl_or_trait_item<'tcx>(tcx: &ty::ctxt<'tcx>, def: ast::DefId)
                                     tcx)
 }
 
+pub fn get_trait_name(cstore: &cstore::CStore, def: ast::DefId) -> ast::Name {
+    let cdata = cstore.get_crate_data(def.krate);
+    decoder::get_trait_name(cstore.intr.clone(),
+                            &*cdata,
+                            def.node)
+}
+
 pub fn get_trait_item_name_and_kind(cstore: &cstore::CStore, def: ast::DefId)
-                                    -> (ast::Name, resolve::TraitItemKind) {
+                                    -> (ast::Name, def::TraitItemKind) {
     let cdata = cstore.get_crate_data(def.krate);
     decoder::get_trait_item_name_and_kind(cstore.intr.clone(),
                                           &*cdata,
@@ -196,9 +203,11 @@ pub fn get_methods_if_impl(cstore: &cstore::CStore,
     decoder::get_methods_if_impl(cstore.intr.clone(), &*cdata, def.node)
 }
 
-pub fn get_item_attrs(cstore: &cstore::CStore,
-                      def_id: ast::DefId,
-                      f: |Vec<ast::Attribute>|) {
+pub fn get_item_attrs<F>(cstore: &cstore::CStore,
+                         def_id: ast::DefId,
+                         f: F) where
+    F: FnOnce(Vec<ast::Attribute>),
+{
     let cdata = cstore.get_crate_data(def_id.krate);
     decoder::get_item_attrs(&*cdata, def_id.node, f)
 }
@@ -218,7 +227,7 @@ pub fn get_struct_field_attrs(cstore: &cstore::CStore, def: ast::DefId) -> HashM
 
 pub fn get_type<'tcx>(tcx: &ty::ctxt<'tcx>,
                       def: ast::DefId)
-                      -> ty::Polytype<'tcx> {
+                      -> ty::TypeScheme<'tcx> {
     let cstore = &tcx.sess.cstore;
     let cdata = cstore.get_crate_data(def.krate);
     decoder::get_type(&*cdata, def.node, tcx)
@@ -231,28 +240,27 @@ pub fn get_trait_def<'tcx>(tcx: &ty::ctxt<'tcx>, def: ast::DefId) -> ty::TraitDe
 }
 
 pub fn get_field_type<'tcx>(tcx: &ty::ctxt<'tcx>, class_id: ast::DefId,
-                            def: ast::DefId) -> ty::Polytype<'tcx> {
+                            def: ast::DefId) -> ty::TypeScheme<'tcx> {
     let cstore = &tcx.sess.cstore;
     let cdata = cstore.get_crate_data(class_id.krate);
     let all_items = reader::get_doc(rbml::Doc::new(cdata.data()), tag_items);
     let class_doc = expect(tcx.sess.diagnostic(),
                            decoder::maybe_find_item(class_id.node, all_items),
                            || {
-        (format!("get_field_type: class ID {} not found",
+        (format!("get_field_type: class ID {:?} not found",
                  class_id)).to_string()
     });
     let the_field = expect(tcx.sess.diagnostic(),
         decoder::maybe_find_item(def.node, class_doc),
         || {
-            (format!("get_field_type: in class {}, field ID {} not found",
+            (format!("get_field_type: in class {:?}, field ID {:?} not found",
                     class_id,
                     def)).to_string()
         });
     let ty = decoder::item_type(def, the_field, tcx, &*cdata);
-    ty::Polytype {
-        generics: ty::Generics {types: VecPerParamSpace::empty(),
-                                regions: VecPerParamSpace::empty()},
-        ty: ty
+    ty::TypeScheme {
+        generics: ty::Generics::empty(),
+        ty: ty,
     }
 }
 
@@ -281,23 +289,29 @@ pub fn get_native_libraries(cstore: &cstore::CStore, crate_num: ast::CrateNum)
     decoder::get_native_libraries(&*cdata)
 }
 
-pub fn each_impl(cstore: &cstore::CStore,
-                 crate_num: ast::CrateNum,
-                 callback: |ast::DefId|) {
+pub fn each_impl<F>(cstore: &cstore::CStore,
+                    crate_num: ast::CrateNum,
+                    callback: F) where
+    F: FnMut(ast::DefId),
+{
     let cdata = cstore.get_crate_data(crate_num);
     decoder::each_impl(&*cdata, callback)
 }
 
-pub fn each_implementation_for_type(cstore: &cstore::CStore,
-                                    def_id: ast::DefId,
-                                    callback: |ast::DefId|) {
+pub fn each_implementation_for_type<F>(cstore: &cstore::CStore,
+                                       def_id: ast::DefId,
+                                       callback: F) where
+    F: FnMut(ast::DefId),
+{
     let cdata = cstore.get_crate_data(def_id.krate);
     decoder::each_implementation_for_type(&*cdata, def_id.node, callback)
 }
 
-pub fn each_implementation_for_trait(cstore: &cstore::CStore,
-                                     def_id: ast::DefId,
-                                     callback: |ast::DefId|) {
+pub fn each_implementation_for_trait<F>(cstore: &cstore::CStore,
+                                        def_id: ast::DefId,
+                                        callback: F) where
+    F: FnMut(ast::DefId),
+{
     let cdata = cstore.get_crate_data(def_id.krate);
     decoder::each_implementation_for_trait(&*cdata, def_id.node, callback)
 }
@@ -360,6 +374,18 @@ pub fn get_stability(cstore: &cstore::CStore,
                      -> Option<attr::Stability> {
     let cdata = cstore.get_crate_data(def.krate);
     decoder::get_stability(&*cdata, def.node)
+}
+
+pub fn is_staged_api(cstore: &cstore::CStore, def: ast::DefId) -> bool {
+    let cdata = cstore.get_crate_data(def.krate);
+    let attrs = decoder::get_crate_attributes(cdata.data());
+    for attr in attrs.iter() {
+        if attr.name().get() == "staged_api" {
+            match attr.node.value.node { ast::MetaWord(_) => return true, _ => (/*pass*/) }
+        }
+    }
+
+    return false;
 }
 
 pub fn get_repr_attrs(cstore: &cstore::CStore, def: ast::DefId)

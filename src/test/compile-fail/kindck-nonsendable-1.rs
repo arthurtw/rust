@@ -11,16 +11,14 @@
 
 use std::rc::Rc;
 
-fn foo(_x: Rc<uint>) {}
+fn foo(_x: Rc<usize>) {}
 
-fn bar() {
-    let x = Rc::new(3u);
-    let _: proc():Send = proc() foo(x); //~ ERROR `core::kinds::Send` is not implemented
+fn bar<F:FnOnce() + Send>(_: F) { }
+
+fn main() {
+    let x = Rc::new(3us);
+    bar(move|| foo(x));
+    //~^ ERROR `core::marker::Send` is not implemented
+    //~^^ ERROR `core::marker::Send` is not implemented
 }
 
-fn bar2() {
-    let x = Rc::new(3u);
-    let _: proc() = proc() foo(x);
-}
-
-fn main() { }

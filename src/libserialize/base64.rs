@@ -19,6 +19,7 @@ use std::fmt;
 use std::error;
 
 /// Available encoding character sets
+#[derive(Copy)]
 pub enum CharacterSet {
     /// The standard character set (uses `+` and `/`)
     Standard,
@@ -26,9 +27,8 @@ pub enum CharacterSet {
     UrlSafe
 }
 
-impl Copy for CharacterSet {}
-
 /// Available newline types
+#[derive(Copy)]
 pub enum Newline {
     /// A linefeed (i.e. Unix-style newline)
     LF,
@@ -36,9 +36,8 @@ pub enum Newline {
     CRLF
 }
 
-impl Copy for Newline {}
-
 /// Contains configuration parameters for `to_base64`.
+#[derive(Copy)]
 pub struct Config {
     /// Character set to use
     pub char_set: CharacterSet,
@@ -49,8 +48,6 @@ pub struct Config {
     /// `Some(len)` to wrap lines at `len`, `None` to disable line wrapping
     pub line_length: Option<uint>
 }
-
-impl Copy for Config {}
 
 /// Configuration for RFC 4648 standard base64 encoding
 pub static STANDARD: Config =
@@ -73,7 +70,7 @@ static URLSAFE_CHARS: &'static[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
                                        0123456789-_";
 
 /// A trait for converting a value to base64 encoding.
-pub trait ToBase64 for Sized? {
+pub trait ToBase64 {
     /// Converts the value of `self` to a base64 value following the specified
     /// format configuration, returning the owned string.
     fn to_base64(&self, config: Config) -> String;
@@ -173,21 +170,20 @@ impl ToBase64 for [u8] {
 }
 
 /// A trait for converting from base64 encoded values.
-pub trait FromBase64 for Sized? {
+pub trait FromBase64 {
     /// Converts the value of `self`, interpreted as base64 encoded data, into
     /// an owned vector of bytes, returning the vector.
     fn from_base64(&self) -> Result<Vec<u8>, FromBase64Error>;
 }
 
 /// Errors that can occur when decoding a base64 encoded string
+#[derive(Copy)]
 pub enum FromBase64Error {
     /// The input contained a character not part of the base64 format
     InvalidBase64Byte(u8, uint),
     /// The input had an invalid length
     InvalidBase64Length,
 }
-
-impl Copy for FromBase64Error {}
 
 impl fmt::Show for FromBase64Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -208,7 +204,7 @@ impl error::Error for FromBase64Error {
     }
 
     fn detail(&self) -> Option<String> {
-        Some(self.to_string())
+        Some(format!("{:?}", self))
     }
 }
 
@@ -318,7 +314,7 @@ mod tests {
 
     #[test]
     fn test_to_base64_crlf_line_break() {
-        assert!(![0u8, ..1000].to_base64(Config {line_length: None, ..STANDARD})
+        assert!(![0u8; 1000].to_base64(Config {line_length: None, ..STANDARD})
                               .contains("\r\n"));
         assert_eq!(b"foobar".to_base64(Config {line_length: Some(4),
                                                ..STANDARD}),
@@ -327,7 +323,7 @@ mod tests {
 
     #[test]
     fn test_to_base64_lf_line_break() {
-        assert!(![0u8, ..1000].to_base64(Config {line_length: None,
+        assert!(![0u8; 1000].to_base64(Config {line_length: None,
                                                  newline: Newline::LF,
                                                  ..STANDARD})
                               .as_slice()
@@ -385,7 +381,7 @@ mod tests {
 
     #[test]
     fn test_from_base64_invalid_char() {
-        assert!("Zm$=".from_base64().is_err())
+        assert!("Zm$=".from_base64().is_err());
         assert!("Zg==$".from_base64().is_err());
     }
 
@@ -396,11 +392,11 @@ mod tests {
 
     #[test]
     fn test_base64_random() {
-        use std::rand::{task_rng, random, Rng};
+        use std::rand::{thread_rng, random, Rng};
 
         for _ in range(0u, 1000) {
-            let times = task_rng().gen_range(1u, 100);
-            let v = Vec::from_fn(times, |_| random::<u8>());
+            let times = thread_rng().gen_range(1u, 100);
+            let v = thread_rng().gen_iter::<u8>().take(times).collect::<Vec<_>>();
             assert_eq!(v.to_base64(STANDARD)
                         .from_base64()
                         .unwrap(),

@@ -1,4 +1,4 @@
-// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -14,15 +14,18 @@
 #![allow(dead_code)]
 
 #![crate_name = "rustc_llvm"]
-#![experimental]
+#![unstable]
+#![staged_api]
 #![crate_type = "dylib"]
 #![crate_type = "rlib"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
        html_root_url = "http://doc.rust-lang.org/nightly/")]
 
-#![feature(globs)]
+#![allow(unknown_features)]
 #![feature(link_args)]
+#![feature(box_syntax)]
+#![allow(unknown_features)] #![feature(int_uint)]
 
 extern crate libc;
 
@@ -46,7 +49,7 @@ pub use self::Visibility::*;
 pub use self::DiagnosticSeverity::*;
 pub use self::Linkage::*;
 
-use std::c_str::ToCStr;
+use std::ffi::CString;
 use std::cell::RefCell;
 use std::{raw, mem};
 use libc::{c_uint, c_ushort, uint64_t, c_int, size_t, c_char};
@@ -67,7 +70,7 @@ pub const False: Bool = 0 as Bool;
 
 // Consts for the LLVM CallConv type, pre-cast to uint.
 
-#[deriving(PartialEq)]
+#[derive(Copy, PartialEq)]
 pub enum CallConv {
     CCallConv = 0,
     FastCallConv = 8,
@@ -77,20 +80,18 @@ pub enum CallConv {
     X86_64_Win64 = 79,
 }
 
-impl Copy for CallConv {}
-
+#[derive(Copy)]
 pub enum Visibility {
     LLVMDefaultVisibility = 0,
     HiddenVisibility = 1,
     ProtectedVisibility = 2,
 }
 
-impl Copy for Visibility {}
-
 // This enum omits the obsolete (and no-op) linkage types DLLImportLinkage,
 // DLLExportLinkage, GhostLinkage and LinkOnceODRAutoHideLinkage.
 // LinkerPrivateLinkage and LinkerPrivateWeakLinkage are not included either;
 // they've been removed in upstream LLVM commit r203866.
+#[derive(Copy)]
 pub enum Linkage {
     ExternalLinkage = 0,
     AvailableExternallyLinkage = 1,
@@ -105,18 +106,14 @@ pub enum Linkage {
     CommonLinkage = 14,
 }
 
-impl Copy for Linkage {}
-
 #[repr(C)]
-#[deriving(Show)]
+#[derive(Copy, Show)]
 pub enum DiagnosticSeverity {
     Error,
     Warning,
     Remark,
     Note,
 }
-
-impl Copy for DiagnosticSeverity {}
 
 bitflags! {
     flags Attribute : u32 {
@@ -149,9 +146,9 @@ bitflags! {
     }
 }
 
-impl Copy for Attribute {}
 
 #[repr(u64)]
+#[derive(Copy)]
 pub enum OtherAttribute {
     // The following are not really exposed in
     // the LLVM c api so instead to add these
@@ -172,21 +169,17 @@ pub enum OtherAttribute {
     NonNullAttribute = 1 << 44,
 }
 
-impl Copy for OtherAttribute {}
-
+#[derive(Copy)]
 pub enum SpecialAttribute {
     DereferenceableAttribute(u64)
 }
 
-impl Copy for SpecialAttribute {}
-
 #[repr(C)]
+#[derive(Copy)]
 pub enum AttributeSet {
     ReturnIndex = 0,
     FunctionIndex = !0
 }
-
-impl Copy for AttributeSet {}
 
 pub trait AttrHelper {
     fn apply_llfn(&self, idx: c_uint, llfn: ValueRef);
@@ -274,6 +267,7 @@ impl AttrBuilder {
 }
 
 // enum for the LLVM IntPredicate type
+#[derive(Copy)]
 pub enum IntPredicate {
     IntEQ = 32,
     IntNE = 33,
@@ -287,9 +281,8 @@ pub enum IntPredicate {
     IntSLE = 41,
 }
 
-impl Copy for IntPredicate {}
-
 // enum for the LLVM RealPredicate type
+#[derive(Copy)]
 pub enum RealPredicate {
     RealPredicateFalse = 0,
     RealOEQ = 1,
@@ -309,11 +302,9 @@ pub enum RealPredicate {
     RealPredicateTrue = 15,
 }
 
-impl Copy for RealPredicate {}
-
 // The LLVM TypeKind type - must stay in sync with the def of
 // LLVMTypeKind in llvm/include/llvm-c/Core.h
-#[deriving(PartialEq)]
+#[derive(Copy, PartialEq)]
 #[repr(C)]
 pub enum TypeKind {
     Void      = 0,
@@ -334,9 +325,8 @@ pub enum TypeKind {
     X86_MMX   = 15,
 }
 
-impl Copy for TypeKind {}
-
 #[repr(C)]
+#[derive(Copy)]
 pub enum AtomicBinOp {
     AtomicXchg = 0,
     AtomicAdd  = 1,
@@ -351,9 +341,8 @@ pub enum AtomicBinOp {
     AtomicUMin = 10,
 }
 
-impl Copy for AtomicBinOp {}
-
 #[repr(C)]
+#[derive(Copy)]
 pub enum AtomicOrdering {
     NotAtomic = 0,
     Unordered = 1,
@@ -365,17 +354,15 @@ pub enum AtomicOrdering {
     SequentiallyConsistent = 7
 }
 
-impl Copy for AtomicOrdering {}
-
 // Consts for the LLVMCodeGenFileType type (in include/llvm/c/TargetMachine.h)
 #[repr(C)]
+#[derive(Copy)]
 pub enum FileType {
     AssemblyFileType = 0,
     ObjectFileType = 1
 }
 
-impl Copy for FileType {}
-
+#[derive(Copy)]
 pub enum MetadataType {
     MD_dbg = 0,
     MD_tbaa = 1,
@@ -385,17 +372,14 @@ pub enum MetadataType {
     MD_tbaa_struct = 5
 }
 
-impl Copy for MetadataType {}
-
 // Inline Asm Dialect
+#[derive(Copy)]
 pub enum AsmDialect {
     AD_ATT   = 0,
     AD_Intel = 1
 }
 
-impl Copy for AsmDialect {}
-
-#[deriving(PartialEq, Clone)]
+#[derive(Copy, PartialEq, Clone)]
 #[repr(C)]
 pub enum CodeGenOptLevel {
     CodeGenLevelNone = 0,
@@ -404,9 +388,7 @@ pub enum CodeGenOptLevel {
     CodeGenLevelAggressive = 3,
 }
 
-impl Copy for CodeGenOptLevel {}
-
-#[deriving(PartialEq)]
+#[derive(Copy, PartialEq)]
 #[repr(C)]
 pub enum RelocMode {
     RelocDefault = 0,
@@ -415,9 +397,8 @@ pub enum RelocMode {
     RelocDynamicNoPic = 3,
 }
 
-impl Copy for RelocMode {}
-
 #[repr(C)]
+#[derive(Copy)]
 pub enum CodeGenModel {
     CodeModelDefault = 0,
     CodeModelJITDefault = 1,
@@ -427,9 +408,8 @@ pub enum CodeGenModel {
     CodeModelLarge = 5,
 }
 
-impl Copy for CodeGenModel {}
-
 #[repr(C)]
+#[derive(Copy)]
 pub enum DiagnosticKind {
     DK_InlineAsm = 0,
     DK_StackSize,
@@ -440,8 +420,6 @@ pub enum DiagnosticKind {
     DK_OptimizationRemarkAnalysis,
     DK_OptimizationFailure,
 }
-
-impl Copy for DiagnosticKind {}
 
 // Opaque pointer types
 #[allow(missing_copy_implementations)]
@@ -465,6 +443,9 @@ pub type BuilderRef = *mut Builder_opaque;
 #[allow(missing_copy_implementations)]
 pub enum ExecutionEngine_opaque {}
 pub type ExecutionEngineRef = *mut ExecutionEngine_opaque;
+#[allow(missing_copy_implementations)]
+pub enum RustJITMemoryManager_opaque {}
+pub type RustJITMemoryManagerRef = *mut RustJITMemoryManager_opaque;
 #[allow(missing_copy_implementations)]
 pub enum MemoryBuffer_opaque {}
 pub type MemoryBufferRef = *mut MemoryBuffer_opaque;
@@ -534,6 +515,7 @@ pub mod debuginfo {
     pub type DIArray = DIDescriptor;
     pub type DISubrange = DIDescriptor;
 
+    #[derive(Copy)]
     pub enum DIDescriptorFlags {
       FlagPrivate            = 1 << 0,
       FlagProtected          = 1 << 1,
@@ -552,8 +534,6 @@ pub mod debuginfo {
       FlagLValueReference    = 1 << 14,
       FlagRValueReference    = 1 << 15
     }
-
-    impl Copy for DIDescriptorFlags {}
 }
 
 
@@ -1064,7 +1044,18 @@ extern {
                                          Instr: ValueRef,
                                          Name: *const c_char);
     pub fn LLVMDisposeBuilder(Builder: BuilderRef);
+
+    /* Execution engine */
+    pub fn LLVMRustCreateJITMemoryManager(morestack: *const ())
+                                          -> RustJITMemoryManagerRef;
+    pub fn LLVMBuildExecutionEngine(Mod: ModuleRef,
+                                    MM: RustJITMemoryManagerRef) -> ExecutionEngineRef;
     pub fn LLVMDisposeExecutionEngine(EE: ExecutionEngineRef);
+    pub fn LLVMExecutionEngineFinalizeObject(EE: ExecutionEngineRef);
+    pub fn LLVMRustLoadDynamicLibrary(path: *const c_char) -> Bool;
+    pub fn LLVMExecutionEngineAddModule(EE: ExecutionEngineRef, M: ModuleRef);
+    pub fn LLVMExecutionEngineRemoveModule(EE: ExecutionEngineRef, M: ModuleRef)
+                                           -> Bool;
 
     /* Metadata */
     pub fn LLVMSetCurrentDebugLocation(Builder: BuilderRef, L: ValueRef);
@@ -1754,7 +1745,8 @@ extern {
                                           isOptimized: bool,
                                           Flags: *const c_char,
                                           RuntimeVer: c_uint,
-                                          SplitName: *const c_char);
+                                          SplitName: *const c_char)
+                                          -> DIDescriptor;
 
     pub fn LLVMDIBuilderCreateFile(Builder: DIBuilderRef,
                                    Filename: *const c_char,
@@ -1972,6 +1964,11 @@ extern {
     pub fn LLVMInitializeARMTargetMC();
     pub fn LLVMInitializeARMAsmPrinter();
     pub fn LLVMInitializeARMAsmParser();
+    pub fn LLVMInitializeAArch64TargetInfo();
+    pub fn LLVMInitializeAArch64Target();
+    pub fn LLVMInitializeAArch64TargetMC();
+    pub fn LLVMInitializeAArch64AsmPrinter();
+    pub fn LLVMInitializeAArch64AsmParser();
     pub fn LLVMInitializeMipsTargetInfo();
     pub fn LLVMInitializeMipsTarget();
     pub fn LLVMInitializeMipsTargetMC();
@@ -2119,10 +2116,9 @@ impl Drop for TargetData {
 }
 
 pub fn mk_target_data(string_rep: &str) -> TargetData {
+    let string_rep = CString::from_slice(string_rep.as_bytes());
     TargetData {
-        lltd: string_rep.with_c_str(|buf| {
-            unsafe { LLVMCreateTargetData(buf) }
-        })
+        lltd: unsafe { LLVMCreateTargetData(string_rep.as_ptr()) }
     }
 }
 
@@ -2206,7 +2202,7 @@ pub unsafe extern "C" fn rust_llvm_string_write_impl(sr: RustStringRef,
     (*sr).borrow_mut().push_all(slice);
 }
 
-pub fn build_string(f: |RustStringRef|) -> Option<String> {
+pub fn build_string<F>(f: F) -> Option<String> where F: FnOnce(RustStringRef){
     let mut buf = RefCell::new(Vec::new());
     f(&mut buf as RustStringRepr as RustStringRef);
     String::from_utf8(buf.into_inner()).ok()
@@ -2240,6 +2236,12 @@ pub unsafe fn static_link_hack_this_sucks() {
     LLVMInitializeARMTargetMC();
     LLVMInitializeARMAsmPrinter();
     LLVMInitializeARMAsmParser();
+
+    LLVMInitializeAArch64TargetInfo();
+    LLVMInitializeAArch64Target();
+    LLVMInitializeAArch64TargetMC();
+    LLVMInitializeAArch64AsmPrinter();
+    LLVMInitializeAArch64AsmParser();
 
     LLVMInitializeMipsTargetInfo();
     LLVMInitializeMipsTarget();
@@ -2276,5 +2278,5 @@ pub unsafe fn static_link_hack_this_sucks() {
 // Works to the above fix for #15460 to ensure LLVM dependencies that
 // are only used by rustllvm don't get stripped by the linker.
 mod llvmdeps {
-    include!(env!("CFG_LLVM_LINKAGE_FILE"))
+    include! { env!("CFG_LLVM_LINKAGE_FILE") }
 }

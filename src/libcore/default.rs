@@ -26,7 +26,7 @@
 //! ```
 //! use std::default::Default;
 //!
-//! #[deriving(Default)]
+//! #[derive(Default)]
 //! struct SomeOptions {
 //!     foo: int,
 //!     bar: f32,
@@ -54,7 +54,7 @@
 //!     fn default() -> Kind { Kind::A }
 //! }
 //!
-//! #[deriving(Default)]
+//! #[derive(Default)]
 //! struct SomeOptions {
 //!     foo: int,
 //!     bar: f32,
@@ -71,7 +71,7 @@
 //!
 //! ```
 //! # use std::default::Default;
-//! # #[deriving(Default)]
+//! # #[derive(Default)]
 //! # struct SomeOptions {
 //! #     foo: int,
 //! #     bar: f32,
@@ -86,17 +86,18 @@
 /// A trait that types which have a useful default value should implement.
 ///
 /// A struct can derive default implementations of `Default` for basic types using
-/// `#[deriving(Default)]`.
+/// `#[derive(Default)]`.
 ///
 /// # Examples
 ///
 /// ```
-/// #[deriving(Default)]
+/// #[derive(Default)]
 /// struct SomeOptions {
 ///     foo: int,
 ///     bar: f32,
 /// }
 /// ```
+#[stable]
 pub trait Default {
     /// Returns the "default value" for a type.
     ///
@@ -130,33 +131,37 @@ pub trait Default {
     ///     fn default() -> Kind { Kind::A }
     /// }
     /// ```
+    #[stable]
     fn default() -> Self;
 }
 
-macro_rules! default_impl(
+macro_rules! default_impl {
     ($t:ty, $v:expr) => {
+        #[stable]
         impl Default for $t {
             #[inline]
+            #[stable]
             fn default() -> $t { $v }
         }
     }
-)
+}
 
-default_impl!((), ())
-default_impl!(bool, false)
-default_impl!(char, '\x00')
+default_impl! { (), () }
+default_impl! { bool, false }
+default_impl! { char, '\x00' }
 
-default_impl!(uint, 0u)
-default_impl!(u8,  0u8)
-default_impl!(u16, 0u16)
-default_impl!(u32, 0u32)
-default_impl!(u64, 0u64)
+default_impl! { uint, 0u }
+default_impl! { u8,  0u8 }
+default_impl! { u16, 0u16 }
+default_impl! { u32, 0u32 }
+default_impl! { u64, 0u64 }
 
-default_impl!(int, 0i)
-default_impl!(i8,  0i8)
-default_impl!(i16, 0i16)
-default_impl!(i32, 0i32)
-default_impl!(i64, 0i64)
+default_impl! { int, 0i }
+default_impl! { i8,  0i8 }
+default_impl! { i16, 0i16 }
+default_impl! { i32, 0i32 }
+default_impl! { i64, 0i64 }
 
-default_impl!(f32, 0.0f32)
-default_impl!(f64, 0.0f64)
+default_impl! { f32, 0.0f32 }
+default_impl! { f64, 0.0f64 }
+

@@ -30,7 +30,7 @@ pub struct ExpectedError {
 pub static EXPECTED_PATTERN : &'static str =
     r"//~(?P<follow>\|)?(?P<adjusts>\^*)\s*(?P<kind>\S*)\s*(?P<msg>.*)";
 
-#[deriving(PartialEq, Show)]
+#[derive(PartialEq, Show)]
 enum WhichLine { ThisLine, FollowPrevious(uint), AdjustBackward(uint) }
 
 // Load any test directives embedded in the file
@@ -66,10 +66,10 @@ fn parse_expected(last_nonfollow_error: Option<uint>,
                   line: &str,
                   re: &Regex) -> Option<(WhichLine, ExpectedError)> {
     re.captures(line).and_then(|caps| {
-        let adjusts = caps.name("adjusts").len();
-        let kind = caps.name("kind").to_ascii_lower();
-        let msg = caps.name("msg").trim().to_string();
-        let follow = caps.name("follow").len() > 0;
+        let adjusts = caps.name("adjusts").unwrap_or("").len();
+        let kind = caps.name("kind").unwrap_or("").to_ascii_lowercase();
+        let msg = caps.name("msg").unwrap_or("").trim().to_string();
+        let follow = caps.name("follow").unwrap_or("").len() > 0;
 
         let (which, line) = if follow {
             assert!(adjusts == 0, "use either //~| or //~^, not both.");
@@ -84,7 +84,7 @@ fn parse_expected(last_nonfollow_error: Option<uint>,
             (which, line)
         };
 
-        debug!("line={} which={} kind={} msg={}", line_num, which, kind, msg);
+        debug!("line={} which={:?} kind={:?} msg={:?}", line_num, which, kind, msg);
         Some((which, ExpectedError { line: line,
                                      kind: kind,
                                      msg: msg, }))

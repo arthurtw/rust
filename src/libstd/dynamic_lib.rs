@@ -12,24 +12,15 @@
 //!
 //! A simple wrapper over the platform's dynamic library facilities
 
-#![experimental]
+#![unstable]
 #![allow(missing_docs)]
 
-use clone::Clone;
-use c_str::ToCStr;
-use iter::IteratorExt;
+use prelude::v1::*;
+
+use ffi::CString;
 use mem;
-use ops::*;
-use option::*;
-use option::Option::{None, Some};
 use os;
-use path::{Path,GenericPath};
-use result::*;
-use result::Result::{Err, Ok};
-use slice::{AsSlice,SlicePrelude};
 use str;
-use string::String;
-use vec::Vec;
 
 #[allow(missing_copy_implementations)]
 pub struct DynamicLibrary {
@@ -60,13 +51,11 @@ impl DynamicLibrary {
 
     /// Lazily open a dynamic library. When passed None it gives a
     /// handle to the calling process
-    pub fn open<T: ToCStr>(filename: Option<T>)
-                        -> Result<DynamicLibrary, String> {
+    pub fn open(filename: Option<&Path>) -> Result<DynamicLibrary, String> {
         unsafe {
-            let mut filename = filename;
             let maybe_library = dl::check_for_errors_in(|| {
-                match filename.take() {
-                    Some(name) => dl::open_external(name),
+                match filename {
+                    Some(name) => dl::open_external(name.as_vec()),
                     None => dl::open_internal()
                 }
             });
@@ -139,10 +128,9 @@ impl DynamicLibrary {
         // This function should have a lifetime constraint of 'a on
         // T but that feature is still unimplemented
 
+        let raw_string = CString::from_slice(symbol.as_bytes());
         let maybe_symbol_value = dl::check_for_errors_in(|| {
-            symbol.with_c_str(|raw_string| {
-                dl::symbol(self.handle, raw_string)
-            })
+            dl::symbol(self.handle, raw_string.as_ptr())
         });
 
         // The value must not be constructed if there is an error so
@@ -157,7 +145,7 @@ impl DynamicLibrary {
 #[cfg(all(test, not(target_os = "ios")))]
 mod test {
     use super::*;
-    use prelude::*;
+    use prelude::v1::*;
     use libc;
     use mem;
 
@@ -166,7 +154,7 @@ mod test {
     fn test_loading_cosine() {
         // The math library does not need to be loaded since it is already
         // statically linked in
-        let none: Option<Path> = None; // appease the typechecker
+        let none: Option<&Path> = None; // appease the typechecker
         let libm = match DynamicLibrary::open(none) {
             Err(error) => panic!("Could not load self as module: {}", error),
             Ok(libm) => libm
@@ -212,26 +200,25 @@ mod test {
           target_os = "dragonfly"))]
 pub mod dl {
     pub use self::Rtld::*;
+    use prelude::v1::*;
 
-    use c_str::{CString, ToCStr};
+    use ffi::{self, CString};
+    use str;
     use libc;
-    use kinds::Copy;
     use ptr;
-    use result::*;
-    use result::Result::{Err, Ok};
-    use string::String;
 
-    pub unsafe fn open_external<T: ToCStr>(filename: T) -> *mut u8 {
-        filename.with_c_str(|raw_name| {
-            dlopen(raw_name, Lazy as libc::c_int) as *mut u8
-        })
+    pub unsafe fn open_external(filename: &[u8]) -> *mut u8 {
+        let s = CString::from_slice(filename);
+        dlopen(s.as_ptr(), Lazy as libc::c_int) as *mut u8
     }
 
     pub unsafe fn open_internal() -> *mut u8 {
         dlopen(ptr::null(), Lazy as libc::c_int) as *mut u8
     }
 
-    pub fn check_for_errors_in<T>(f: || -> T) -> Result<T, String> {
+    pub fn check_for_errors_in<T, F>(f: F) -> Result<T, String> where
+        F: FnOnce() -> T,
+    {
         use sync::{StaticMutex, MUTEX_INIT};
         static LOCK: StaticMutex = MUTEX_INIT;
         unsafe {
@@ -246,8 +233,8 @@ pub mod dl {
             let ret = if ptr::null() == last_error {
                 Ok(result)
             } else {
-                Err(String::from_str(CString::new(last_error, false).as_str()
-                    .unwrap()))
+                let s = ffi::c_str_to_bytes(&last_error);
+                Err(str::from_utf8(s).unwrap().to_string())
             };
 
             ret
@@ -262,14 +249,13 @@ pub mod dl {
         dlclose(handle as *mut libc::c_void); ()
     }
 
+    #[derive(Copy)]
     pub enum Rtld {
         Lazy = 1,
         Now = 2,
         Global = 256,
         Local = 0,
     }
-
-    impl Copy for Rtld {}
 
     #[link_name = "dl"]
     extern {
@@ -284,23 +270,22 @@ pub mod dl {
 
 #[cfg(target_os = "windows")]
 pub mod dl {
-    use c_str::ToCStr;
     use iter::IteratorExt;
     use libc;
+    use ops::FnOnce;
     use os;
     use ptr;
     use result::Result;
     use result::Result::{Ok, Err};
-    use slice::SlicePrelude;
-    use str::StrPrelude;
+    use slice::SliceExt;
+    use str::StrExt;
     use str;
     use string::String;
     use vec::Vec;
 
-    pub unsafe fn open_external<T: ToCStr>(filename: T) -> *mut u8 {
+    pub unsafe fn open_external(filename: &[u8]) -> *mut u8 {
         // Windows expects Unicode data
-        let filename_cstr = filename.to_c_str();
-        let filename_str = str::from_utf8(filename_cstr.as_bytes_no_nul()).unwrap();
+        let filename_str = str::from_utf8(filename).unwrap();
         let mut filename_str: Vec<u16> = filename_str.utf16_units().collect();
         filename_str.push(0);
         LoadLibraryW(filename_str.as_ptr() as *const libc::c_void) as *mut u8
@@ -312,7 +297,9 @@ pub mod dl {
         handle as *mut u8
     }
 
-    pub fn check_for_errors_in<T>(f: || -> T) -> Result<T, String> {
+    pub fn check_for_errors_in<T, F>(f: F) -> Result<T, String> where
+        F: FnOnce() -> T,
+    {
         unsafe {
             SetLastError(0);
 

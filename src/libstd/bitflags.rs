@@ -8,8 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![experimental]
-#![macro_escape]
+#![unstable]
 
 //! A typesafe bitmask flag generator.
 
@@ -24,16 +23,14 @@
 /// ```{.rust}
 /// bitflags! {
 ///     flags Flags: u32 {
-///         const FLAG_A       = 0x00000001,
-///         const FLAG_B       = 0x00000010,
-///         const FLAG_C       = 0x00000100,
+///         const FLAG_A       = 0b00000001,
+///         const FLAG_B       = 0b00000010,
+///         const FLAG_C       = 0b00000100,
 ///         const FLAG_ABC     = FLAG_A.bits
 ///                            | FLAG_B.bits
 ///                            | FLAG_C.bits,
 ///     }
 /// }
-///
-/// impl Copy for Flags {}
 ///
 /// fn main() {
 ///     let e1 = FLAG_A | FLAG_C;
@@ -52,12 +49,10 @@
 ///
 /// bitflags! {
 ///     flags Flags: u32 {
-///         const FLAG_A   = 0x00000001,
-///         const FLAG_B   = 0x00000010,
+///         const FLAG_A   = 0b00000001,
+///         const FLAG_B   = 0b00000010,
 ///     }
 /// }
-///
-/// impl Copy for Flags {}
 ///
 /// impl Flags {
 ///     pub fn clear(&mut self) {
@@ -76,7 +71,7 @@
 ///     let mut flags = FLAG_A | FLAG_B;
 ///     flags.clear();
 ///     assert!(flags.is_empty());
-///     assert_eq!(format!("{}", flags).as_slice(), "hi!");
+///     assert_eq!(format!("{:?}", flags).as_slice(), "hi!");
 /// }
 /// ```
 ///
@@ -108,6 +103,10 @@
 /// - `empty`: an empty set of flags
 /// - `all`: the set of all flags
 /// - `bits`: the raw value of the flags currently stored
+/// - `from_bits`: convert from underlying bit representation, unless that
+///                representation contains bits that do not correspond to a flag
+/// - `from_bits_truncate`: convert from underlying bit representation, dropping
+///                         any bits that do not correspond to flags
 /// - `is_empty`: `true` if no flags are currently stored
 /// - `is_all`: `true` if all flags are currently set
 /// - `intersects`: `true` if there are flags common to both `self` and `other`
@@ -121,7 +120,7 @@ macro_rules! bitflags {
     ($(#[$attr:meta])* flags $BitFlags:ident: $T:ty {
         $($(#[$Flag_attr:meta])* const $Flag:ident = $value:expr),+
     }) => {
-        #[deriving(PartialEq, Eq, Clone, PartialOrd, Ord, Hash)]
+        #[derive(Copy, PartialEq, Eq, Clone, PartialOrd, Ord, Hash)]
         $(#[$attr])*
         pub struct $BitFlags {
             bits: $T,
@@ -209,42 +208,52 @@ macro_rules! bitflags {
             }
         }
 
-        impl BitOr<$BitFlags, $BitFlags> for $BitFlags {
+        impl ::std::ops::BitOr for $BitFlags {
+            type Output = $BitFlags;
+
             /// Returns the union of the two sets of flags.
             #[inline]
-            fn bitor(&self, other: &$BitFlags) -> $BitFlags {
+            fn bitor(self, other: $BitFlags) -> $BitFlags {
                 $BitFlags { bits: self.bits | other.bits }
             }
         }
 
-        impl BitXor<$BitFlags, $BitFlags> for $BitFlags {
+        impl ::std::ops::BitXor for $BitFlags {
+            type Output = $BitFlags;
+
             /// Returns the left flags, but with all the right flags toggled.
             #[inline]
-            fn bitxor(&self, other: &$BitFlags) -> $BitFlags {
+            fn bitxor(self, other: $BitFlags) -> $BitFlags {
                 $BitFlags { bits: self.bits ^ other.bits }
             }
         }
 
-        impl BitAnd<$BitFlags, $BitFlags> for $BitFlags {
+        impl ::std::ops::BitAnd for $BitFlags {
+            type Output = $BitFlags;
+
             /// Returns the intersection between the two sets of flags.
             #[inline]
-            fn bitand(&self, other: &$BitFlags) -> $BitFlags {
+            fn bitand(self, other: $BitFlags) -> $BitFlags {
                 $BitFlags { bits: self.bits & other.bits }
             }
         }
 
-        impl Sub<$BitFlags, $BitFlags> for $BitFlags {
+        impl ::std::ops::Sub for $BitFlags {
+            type Output = $BitFlags;
+
             /// Returns the set difference of the two sets of flags.
             #[inline]
-            fn sub(&self, other: &$BitFlags) -> $BitFlags {
+            fn sub(self, other: $BitFlags) -> $BitFlags {
                 $BitFlags { bits: self.bits & !other.bits }
             }
         }
 
-        impl Not<$BitFlags> for $BitFlags {
+        impl ::std::ops::Not for $BitFlags {
+            type Output = $BitFlags;
+
             /// Returns the complement of this set of flags.
             #[inline]
-            fn not(&self) -> $BitFlags {
+            fn not(self) -> $BitFlags {
                 $BitFlags { bits: !self.bits } & $BitFlags::all()
             }
         }
@@ -264,10 +273,8 @@ macro_rules! bitflags {
 #[cfg(test)]
 #[allow(non_upper_case_globals)]
 mod tests {
-    use kinds::Copy;
-    use hash;
+    use hash::{self, SipHasher};
     use option::Option::{Some, None};
-    use ops::{BitOr, BitAnd, BitXor, Sub, Not};
 
     bitflags! {
         #[doc = "> The first principle is that you must not fool yourself — and"]
@@ -275,10 +282,10 @@ mod tests {
         #[doc = "> "]
         #[doc = "> - Richard Feynman"]
         flags Flags: u32 {
-            const FlagA       = 0x00000001,
+            const FlagA       = 0b00000001,
             #[doc = "<pcwalton> macros are way better at generating code than trans is"]
-            const FlagB       = 0x00000010,
-            const FlagC       = 0x00000100,
+            const FlagB       = 0b00000010,
+            const FlagC       = 0b00000100,
             #[doc = "* cmr bed"]
             #[doc = "* strcat table"]
             #[doc = "<strcat> wait what?"]
@@ -288,33 +295,29 @@ mod tests {
         }
     }
 
-    impl Copy for Flags {}
-
     bitflags! {
         flags AnotherSetOfFlags: i8 {
             const AnotherFlag = -1_i8,
         }
     }
 
-    impl Copy for AnotherSetOfFlags {}
-
     #[test]
     fn test_bits(){
-        assert_eq!(Flags::empty().bits(), 0x00000000);
-        assert_eq!(FlagA.bits(), 0x00000001);
-        assert_eq!(FlagABC.bits(), 0x00000111);
+        assert_eq!(Flags::empty().bits(), 0b00000000);
+        assert_eq!(FlagA.bits(), 0b00000001);
+        assert_eq!(FlagABC.bits(), 0b00000111);
 
-        assert_eq!(AnotherSetOfFlags::empty().bits(), 0x00);
+        assert_eq!(AnotherSetOfFlags::empty().bits(), 0b00);
         assert_eq!(AnotherFlag.bits(), !0_i8);
     }
 
     #[test]
     fn test_from_bits() {
         assert!(Flags::from_bits(0) == Some(Flags::empty()));
-        assert!(Flags::from_bits(0x1) == Some(FlagA));
-        assert!(Flags::from_bits(0x10) == Some(FlagB));
-        assert!(Flags::from_bits(0x11) == Some(FlagA | FlagB));
-        assert!(Flags::from_bits(0x1000) == None);
+        assert!(Flags::from_bits(0b1) == Some(FlagA));
+        assert!(Flags::from_bits(0b10) == Some(FlagB));
+        assert!(Flags::from_bits(0b11) == Some(FlagA | FlagB));
+        assert!(Flags::from_bits(0b1000) == None);
 
         assert!(AnotherSetOfFlags::from_bits(!0_i8) == Some(AnotherFlag));
     }
@@ -322,11 +325,11 @@ mod tests {
     #[test]
     fn test_from_bits_truncate() {
         assert!(Flags::from_bits_truncate(0) == Flags::empty());
-        assert!(Flags::from_bits_truncate(0x1) == FlagA);
-        assert!(Flags::from_bits_truncate(0x10) == FlagB);
-        assert!(Flags::from_bits_truncate(0x11) == (FlagA | FlagB));
-        assert!(Flags::from_bits_truncate(0x1000) == Flags::empty());
-        assert!(Flags::from_bits_truncate(0x1001) == FlagA);
+        assert!(Flags::from_bits_truncate(0b1) == FlagA);
+        assert!(Flags::from_bits_truncate(0b10) == FlagB);
+        assert!(Flags::from_bits_truncate(0b11) == (FlagA | FlagB));
+        assert!(Flags::from_bits_truncate(0b1000) == Flags::empty());
+        assert!(Flags::from_bits_truncate(0b1001) == FlagA);
 
         assert!(AnotherSetOfFlags::from_bits_truncate(0_i8) == AnotherSetOfFlags::empty());
     }
@@ -464,9 +467,9 @@ mod tests {
     fn test_hash() {
       let mut x = Flags::empty();
       let mut y = Flags::empty();
-      assert!(hash::hash(&x) == hash::hash(&y));
+      assert!(hash::hash::<Flags, SipHasher>(&x) == hash::hash::<Flags, SipHasher>(&y));
       x = Flags::all();
       y = FlagABC;
-      assert!(hash::hash(&x) == hash::hash(&y));
+      assert!(hash::hash::<Flags, SipHasher>(&x) == hash::hash::<Flags, SipHasher>(&y));
     }
 }

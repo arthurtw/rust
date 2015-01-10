@@ -18,7 +18,6 @@ use std::cmp;
 use std::fmt;
 use std::iter;
 use std::num;
-use std::slice::BinarySearchResult;
 
 /// Static data containing Unicode ranges for general categories and scripts.
 use unicode::regex::{UNICODE_CLASSES, PERLD, PERLS, PERLW};
@@ -40,7 +39,7 @@ pub struct Error {
 
 impl fmt::Show for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Regex syntax error near position {}: {}",
+        write!(f, "Regex syntax error near position {}: {:?}",
                self.pos, self.msg)
     }
 }
@@ -53,7 +52,7 @@ impl fmt::Show for Error {
 ///
 /// Note that this representation prevents one from reproducing the regex as
 /// it was typed. (But it could be used to reproduce an equivalent regex.)
-#[deriving(Show, Clone)]
+#[derive(Show, Clone)]
 pub enum Ast {
     Nothing,
     Literal(char, Flags),
@@ -70,20 +69,18 @@ pub enum Ast {
     Rep(Box<Ast>, Repeater, Greed),
 }
 
-#[deriving(Show, PartialEq, Clone)]
+#[derive(Show, PartialEq, Clone)]
 pub enum Repeater {
     ZeroOne,
     ZeroMore,
     OneMore,
 }
 
-#[deriving(Show, Clone)]
+#[derive(Copy, Show, Clone)]
 pub enum Greed {
     Greedy,
     Ungreedy,
 }
-
-impl Copy for Greed {}
 
 impl Greed {
     pub fn is_greedy(&self) -> bool {
@@ -106,7 +103,7 @@ impl Greed {
 /// constructing an abstract syntax tree. Its central purpose is to facilitate
 /// parsing groups and alternations while also maintaining a stack of flag
 /// state.
-#[deriving(Show)]
+#[derive(Show)]
 enum BuildAst {
     Expr(Ast),
     Paren(Flags, uint, String), // '('
@@ -124,7 +121,7 @@ impl BuildAst {
     fn flags(&self) -> Flags {
         match *self {
             Paren(flags, _, _) => flags,
-            _ => panic!("Cannot get flags from {}", self),
+            _ => panic!("Cannot get flags from {:?}", self),
         }
     }
 
@@ -132,7 +129,7 @@ impl BuildAst {
         match *self {
             Paren(_, 0, _) => None,
             Paren(_, c, _) => Some(c),
-            _ => panic!("Cannot get capture group from {}", self),
+            _ => panic!("Cannot get capture group from {:?}", self),
         }
     }
 
@@ -146,7 +143,7 @@ impl BuildAst {
                     Some(name.clone())
                 }
             }
-            _ => panic!("Cannot get capture name from {}", self),
+            _ => panic!("Cannot get capture name from {:?}", self),
         }
     }
 
@@ -160,7 +157,7 @@ impl BuildAst {
     fn unwrap(self) -> Result<Ast, Error> {
         match self {
             Expr(x) => Ok(x),
-            _ => panic!("Tried to unwrap non-AST item: {}", self),
+            _ => panic!("Tried to unwrap non-AST item: {:?}", self),
         }
     }
 }
@@ -224,7 +221,7 @@ impl<'a> Parser<'a> {
                 },
                 '(' => {
                     if self.peek_is(1, '?') {
-                        try!(self.expect('?'))
+                        try!(self.expect('?'));
                         try!(self.parse_group_opts())
                     } else {
                         self.caps += 1;
@@ -287,8 +284,8 @@ impl<'a> Parser<'a> {
         match self.next_char() {
             true => Ok(()),
             false => {
-                self.err(format!("Expected {} but got EOF.",
-                                 expected).as_slice())
+                self.err(&format!("Expected {:?} but got EOF.",
+                                  expected)[])
             }
         }
     }
@@ -296,11 +293,11 @@ impl<'a> Parser<'a> {
     fn expect(&mut self, expected: char) -> Result<(), Error> {
         match self.next_char() {
             true if self.cur() == expected => Ok(()),
-            true => self.err(format!("Expected '{}' but got '{}'.",
-                                     expected, self.cur()).as_slice()),
+            true => self.err(&format!("Expected '{:?}' but got '{:?}'.",
+                                      expected, self.cur())[]),
             false => {
-                self.err(format!("Expected '{}' but got EOF.",
-                                 expected).as_slice())
+                self.err(&format!("Expected '{:?}' but got EOF.",
+                                  expected)[])
             }
         }
     }
@@ -322,9 +319,10 @@ impl<'a> Parser<'a> {
     }
 
     fn push_repeater(&mut self, c: char) -> Result<(), Error> {
-        if self.stack.len() == 0 {
-            return self.err(
-                "A repeat operator must be preceded by a valid expression.")
+        match self.stack.last() {
+            Some(&Expr(..)) => (),
+            // self.stack is empty, or the top item is not an Expr
+            _ => return self.err("A repeat operator must be preceded by a valid expression."),
         }
         let rep: Repeater = match c {
             '?' => ZeroOne, '*' => ZeroMore, '+' => OneMore,
@@ -373,7 +371,7 @@ impl<'a> Parser<'a> {
     fn parse_class(&mut self) -> Result<(), Error> {
         let negated =
             if self.peek_is(1, '^') {
-                try!(self.expect('^'))
+                try!(self.expect('^'));
                 FLAG_NEGATED
             } else {
                 FLAG_EMPTY
@@ -396,7 +394,7 @@ impl<'a> Parser<'a> {
                             continue
                         }
                         Some(ast) =>
-                            panic!("Expected Class AST but got '{}'", ast),
+                            panic!("Expected Class AST but got '{:?}'", ast),
                         // Just drop down and try to add as a regular character.
                         None => {},
                     },
@@ -411,7 +409,7 @@ impl<'a> Parser<'a> {
                             return self.err(
                                 "\\A, \\z, \\b and \\B are not valid escape \
                                  sequences inside a character class."),
-                        ast => panic!("Unexpected AST item '{}'", ast),
+                        ast => panic!("Unexpected AST item '{:?}'", ast),
                     }
                 }
                 ']' if ranges.len() > 0 || alts.len() > 0 => {
@@ -444,15 +442,15 @@ impl<'a> Parser<'a> {
                     match try!(self.parse_escape()) {
                         Literal(c3, _) => c2 = c3, // allow literal escapes below
                         ast =>
-                            return self.err(format!("Expected a literal, but got {}.",
-                                                    ast).as_slice()),
+                            return self.err(&format!("Expected a literal, but got {:?}.",
+                                                     ast)[]),
                     }
                 }
                 if c2 < c {
-                    return self.err(format!("Invalid character class \
-                                             range '{}-{}'",
-                                            c,
-                                            c2).as_slice())
+                    return self.err(&format!("Invalid character class \
+                                              range '{}-{}'",
+                                             c,
+                                             c2)[])
                 }
                 ranges.push((c, self.cur()))
             } else {
@@ -490,7 +488,7 @@ impl<'a> Parser<'a> {
                 FLAG_EMPTY
             };
         let name = self.slice(name_start, closer - 1);
-        match find_class(ASCII_CLASSES, name.as_slice()) {
+        match find_class(ASCII_CLASSES, &name[]) {
             None => None,
             Some(ranges) => {
                 self.chari = closer;
@@ -512,21 +510,21 @@ impl<'a> Parser<'a> {
             match self.pos('}') {
                 Some(i) => i,
                 None => {
-                    return self.err(format!("No closing brace for counted \
-                                             repetition starting at position \
-                                             {}.",
-                                            start).as_slice())
+                    return self.err(&format!("No closing brace for counted \
+                                              repetition starting at position \
+                                              {:?}.",
+                                             start)[])
                 }
             };
         self.chari = closer;
         let greed = try!(self.get_next_greedy());
-        let inner = String::from_chars(
-            self.chars[start+1..closer]);
+        let inner = self.chars[(start+1)..closer].iter().cloned()
+                                               .collect::<String>();
 
         // Parse the min and max values from the regex.
         let (mut min, mut max): (uint, Option<uint>);
         if !inner.contains(",") {
-            min = try!(self.parse_uint(inner.as_slice()));
+            min = try!(self.parse_uint(&inner[]));
             max = Some(min);
         } else {
             let pieces: Vec<&str> = inner.splitn(1, ',').collect();
@@ -546,21 +544,21 @@ impl<'a> Parser<'a> {
 
         // Do some bounds checking and make sure max >= min.
         if min > MAX_REPEAT {
-            return self.err(format!(
+            return self.err(&format!(
                 "{} exceeds maximum allowed repetitions ({})",
-                min, MAX_REPEAT).as_slice());
+                min, MAX_REPEAT)[]);
         }
         if max.is_some() {
             let m = max.unwrap();
             if m > MAX_REPEAT {
-                return self.err(format!(
+                return self.err(&format!(
                     "{} exceeds maximum allowed repetitions ({})",
-                    m, MAX_REPEAT).as_slice());
+                    m, MAX_REPEAT)[]);
             }
             if m < min {
-                return self.err(format!(
+                return self.err(&format!(
                     "Max repetitions ({}) cannot be smaller than min \
-                     repetitions ({}).", m, min).as_slice());
+                     repetitions ({}).", m, min)[]);
             }
         }
 
@@ -597,7 +595,7 @@ impl<'a> Parser<'a> {
     // Parses all escape sequences.
     // Assumes that '\' is the current character.
     fn parse_escape(&mut self) -> Result<Ast, Error> {
-        try!(self.noteof("an escape sequence following a '\\'"))
+        try!(self.noteof("an escape sequence following a '\\'"));
 
         let c = self.cur();
         if is_punct(c) {
@@ -624,8 +622,7 @@ impl<'a> Parser<'a> {
                 Ok(AstClass(ranges, flags))
             }
             _ => {
-                self.err(format!("Invalid escape sequence '\\\\{}'",
-                                 c).as_slice())
+                self.err(&format!("Invalid escape sequence '\\\\{}'", c)[])
             }
         }
     }
@@ -639,13 +636,13 @@ impl<'a> Parser<'a> {
         let negated = if self.cur() == 'P' { FLAG_NEGATED } else { FLAG_EMPTY };
         let mut name: String;
         if self.peek_is(1, '{') {
-            try!(self.expect('{'))
+            try!(self.expect('{'));
             let closer =
                 match self.pos('}') {
                     Some(i) => i,
-                    None => return self.err(format!(
+                    None => return self.err(&format!(
                         "Missing '}}' for unclosed '{{' at position {}",
-                        self.chari).as_slice()),
+                        self.chari)[]),
                 };
             if closer - self.chari + 1 == 0 {
                 return self.err("No Unicode class name found.")
@@ -659,10 +656,10 @@ impl<'a> Parser<'a> {
             name = self.slice(self.chari + 1, self.chari + 2);
             self.chari += 1;
         }
-        match find_class(UNICODE_CLASSES, name.as_slice()) {
+        match find_class(UNICODE_CLASSES, &name[]) {
             None => {
-                return self.err(format!("Could not find Unicode class '{}'",
-                                        name).as_slice())
+                return self.err(&format!("Could not find Unicode class '{}'",
+                                        name)[])
             }
             Some(ranges) => {
                 Ok(AstClass(ranges, negated | (self.flags & FLAG_NOCASE)))
@@ -677,19 +674,19 @@ impl<'a> Parser<'a> {
         let mut end = start + 1;
         let (d2, d3) = (self.peek(1), self.peek(2));
         if d2 >= Some('0') && d2 <= Some('7') {
-            try!(self.noteof("expected octal character in [0-7]"))
+            try!(self.noteof("expected octal character in [0-7]"));
             end += 1;
             if d3 >= Some('0') && d3 <= Some('7') {
-                try!(self.noteof("expected octal character in [0-7]"))
+                try!(self.noteof("expected octal character in [0-7]"));
                 end += 1;
             }
         }
         let s = self.slice(start, end);
-        match num::from_str_radix::<u32>(s.as_slice(), 8) {
+        match num::from_str_radix::<u32>(&s[], 8) {
             Some(n) => Ok(Literal(try!(self.char_from_u32(n)), FLAG_EMPTY)),
             None => {
-                self.err(format!("Could not parse '{}' as octal number.",
-                                 s).as_slice())
+                self.err(&format!("Could not parse '{:?}' as octal number.",
+                                 s)[])
             }
         }
     }
@@ -698,21 +695,21 @@ impl<'a> Parser<'a> {
     // Assumes that \x has been read.
     fn parse_hex(&mut self) -> Result<Ast, Error> {
         if !self.peek_is(1, '{') {
-            try!(self.expect('{'))
+            try!(self.expect('{'));
             return self.parse_hex_two()
         }
         let start = self.chari + 2;
         let closer =
             match self.pos('}') {
                 None => {
-                    return self.err(format!("Missing '}}' for unclosed \
+                    return self.err(&format!("Missing '}}' for unclosed \
                                              '{{' at position {}",
-                                            start).as_slice())
+                                            start)[])
                 }
                 Some(i) => i,
             };
         self.chari = closer;
-        self.parse_hex_digits(self.slice(start, closer).as_slice())
+        self.parse_hex_digits(&self.slice(start, closer)[])
     }
 
     // Parses a two-digit hex number.
@@ -723,7 +720,7 @@ impl<'a> Parser<'a> {
         let (start, end) = (self.chari, self.chari + 2);
         let bad = self.slice(start - 2, self.chars.len());
         try!(self.noteof(format!("Invalid hex escape sequence '{}'",
-                                 bad).as_slice()))
+                                 bad).as_slice()));
         self.parse_hex_digits(self.slice(start, end).as_slice())
     }
 
@@ -732,8 +729,7 @@ impl<'a> Parser<'a> {
         match num::from_str_radix::<u32>(s, 16) {
             Some(n) => Ok(Literal(try!(self.char_from_u32(n)), FLAG_EMPTY)),
             None => {
-                self.err(format!("Could not parse '{}' as hex number.",
-                                 s).as_slice())
+                self.err(&format!("Could not parse '{}' as hex number.", s)[])
             }
         }
     }
@@ -743,7 +739,7 @@ impl<'a> Parser<'a> {
     // is '<'.
     // When done, parser will be at the closing '>' character.
     fn parse_named_capture(&mut self) -> Result<(), Error> {
-        try!(self.noteof("a capture name"))
+        try!(self.noteof("a capture name"));
         let closer =
             match self.pos('>') {
                 Some(i) => i,
@@ -758,8 +754,8 @@ impl<'a> Parser<'a> {
                 "Capture names can only have underscores, letters and digits.")
         }
         if self.names.contains(&name) {
-            return self.err(format!("Duplicate capture group name '{}'.",
-                                    name).as_slice())
+            return self.err(&format!("Duplicate capture group name '{}'.",
+                                    name)[])
         }
         self.names.push(name.clone());
         self.chari = closer;
@@ -773,7 +769,8 @@ impl<'a> Parser<'a> {
     // character.
     fn parse_group_opts(&mut self) -> Result<(), Error> {
         if self.peek_is(1, 'P') && self.peek_is(2, '<') {
-            try!(self.expect('P')) try!(self.expect('<'))
+            try!(self.expect('P'));
+            try!(self.expect('<'));
             return self.parse_named_capture()
         }
         let start = self.chari;
@@ -781,7 +778,8 @@ impl<'a> Parser<'a> {
         let mut sign = 1i;
         let mut saw_flag = false;
         loop {
-            try!(self.noteof("expected non-empty set of flags or closing ')'"))
+            try!(self.noteof(
+                    "expected non-empty set of flags or closing ')'"));
             match self.cur() {
                 'i' => { flags = flags | FLAG_NOCASE;     saw_flag = true},
                 'm' => { flags = flags | FLAG_MULTI;      saw_flag = true},
@@ -789,9 +787,9 @@ impl<'a> Parser<'a> {
                 'U' => { flags = flags | FLAG_SWAP_GREED; saw_flag = true},
                 '-' => {
                     if sign < 0 {
-                        return self.err(format!(
+                        return self.err(&format!(
                             "Cannot negate flags twice in '{}'.",
-                            self.slice(start, self.chari + 1)).as_slice())
+                            self.slice(start, self.chari + 1))[])
                     }
                     sign = -1;
                     saw_flag = false;
@@ -800,9 +798,9 @@ impl<'a> Parser<'a> {
                 ':' | ')' => {
                     if sign < 0 {
                         if !saw_flag {
-                            return self.err(format!(
+                            return self.err(&format!(
                                 "A valid flag does not follow negation in '{}'",
-                                self.slice(start, self.chari + 1)).as_slice())
+                                self.slice(start, self.chari + 1))[])
                         }
                         flags = flags ^ flags;
                     }
@@ -813,8 +811,8 @@ impl<'a> Parser<'a> {
                     self.flags = flags;
                     return Ok(())
                 }
-                _ => return self.err(format!(
-                    "Unrecognized flag '{}'.", self.cur()).as_slice()),
+                _ => return self.err(&format!(
+                    "Unrecognized flag '{}'.", self.cur())[]),
             }
         }
     }
@@ -823,7 +821,7 @@ impl<'a> Parser<'a> {
     // If it is, then the next character is consumed.
     fn get_next_greedy(&mut self) -> Result<Greed, Error> {
         Ok(if self.peek_is(1, '?') {
-            try!(self.expect('?'))
+            try!(self.expect('?'));
             Ungreedy
         } else {
             Greedy
@@ -838,8 +836,9 @@ impl<'a> Parser<'a> {
     // Otherwise, an error will be returned.
     // Generally, `allow_start` is only true when you're *not* expecting an
     // opening parenthesis.
-    fn pos_last(&self, allow_start: bool, pred: |&BuildAst| -> bool)
-               -> Result<uint, Error> {
+    fn pos_last<P>(&self, allow_start: bool, pred: P) -> Result<uint, Error> where
+        P: FnMut(&BuildAst) -> bool,
+   {
         let from = match self.stack.iter().rev().position(pred) {
             Some(i) => i,
             None => {
@@ -887,8 +886,9 @@ impl<'a> Parser<'a> {
     // build_from combines all AST elements starting at 'from' in the
     // parser's stack using 'mk' to combine them. If any such element is not an
     // AST then it is popped off the stack and ignored.
-    fn build_from(&mut self, from: uint, mk: |Ast, Ast| -> Ast)
-                 -> Result<Ast, Error> {
+    fn build_from<F>(&mut self, from: uint, mut mk: F) -> Result<Ast, Error> where
+        F: FnMut(Ast, Ast) -> Ast,
+    {
         if from >= self.stack.len() {
             return self.err("Empty group or alternate not allowed.")
         }
@@ -906,11 +906,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_uint(&self, s: &str) -> Result<uint, Error> {
-        match from_str::<uint>(s) {
+        match s.parse::<uint>() {
             Some(i) => Ok(i),
             None => {
-                self.err(format!("Expected an unsigned integer but got '{}'.",
-                                 s).as_slice())
+                self.err(&format!("Expected an unsigned integer but got '{}'.",
+                                 s)[])
             }
         }
     }
@@ -919,9 +919,8 @@ impl<'a> Parser<'a> {
         match char::from_u32(n) {
             Some(c) => Ok(c),
             None => {
-                self.err(format!("Could not decode '{}' to unicode \
-                                  character.",
-                                 n).as_slice())
+                self.err(&format!("Could not decode '{}' to unicode \
+                                  character.", n)[])
             }
         }
     }
@@ -954,7 +953,7 @@ impl<'a> Parser<'a> {
     }
 
     fn slice(&self, start: uint, end: uint) -> String {
-        String::from_chars(self.chars[start..end])
+        self.chars[start..end].iter().cloned().collect()
     }
 }
 
@@ -1028,9 +1027,9 @@ fn is_valid_cap(c: char) -> bool {
 }
 
 fn find_class(classes: NamedClasses, name: &str) -> Option<Vec<(char, char)>> {
-    match classes.binary_search(|&(s, _)| s.cmp(name)) {
-        BinarySearchResult::Found(i) => Some(classes[i].val1().to_vec()),
-        BinarySearchResult::NotFound(_) => None,
+    match classes.binary_search_by(|&(s, _)| s.cmp(name)) {
+        Ok(i) => Some(classes[i].1.to_vec()),
+        Err(_) => None,
     }
 }
 

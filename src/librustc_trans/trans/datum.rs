@@ -23,17 +23,18 @@ use trans::cleanup::CleanupMethods;
 use trans::expr;
 use trans::tvec;
 use trans::type_of;
-use middle::ty::{mod, Ty};
+use middle::ty::{self, Ty};
 use util::ppaux::{ty_to_string};
 
 use std::fmt;
 use syntax::ast;
+use syntax::codemap::DUMMY_SP;
 
 /// A `Datum` encapsulates the result of evaluating an expression.  It
 /// describes where the value is stored, what Rust type the value has,
 /// whether it is addressed by reference, and so forth. Please refer
 /// the section on datums in `doc.rs` for more details.
-#[deriving(Clone)]
+#[derive(Clone, Copy)]
 pub struct Datum<'tcx, K> {
     /// The llvm value.  This is either a pointer to the Rust value or
     /// the value itself, depending on `kind` below.
@@ -46,14 +47,12 @@ pub struct Datum<'tcx, K> {
     pub kind: K,
 }
 
-impl<'tcx,K:Copy> Copy for Datum<'tcx,K> {}
-
 pub struct DatumBlock<'blk, 'tcx: 'blk, K> {
     pub bcx: Block<'blk, 'tcx>,
     pub datum: Datum<'tcx, K>,
 }
 
-#[deriving(Show)]
+#[derive(Show)]
 pub enum Expr {
     /// a fresh value that was produced and which has no cleanup yet
     /// because it has not yet "landed" into its permanent home
@@ -65,12 +64,10 @@ pub enum Expr {
     LvalueExpr,
 }
 
-#[deriving(Clone, Show)]
+#[derive(Clone, Copy, Show)]
 pub struct Lvalue;
 
-impl Copy for Lvalue {}
-
-#[deriving(Show)]
+#[derive(Show)]
 pub struct Rvalue {
     pub mode: RvalueMode
 }
@@ -86,7 +83,7 @@ impl Drop for Rvalue {
     fn drop(&mut self) { }
 }
 
-#[deriving(PartialEq, Eq, Hash, Show)]
+#[derive(Copy, PartialEq, Eq, Hash, Show)]
 pub enum RvalueMode {
     /// `val` is a pointer to the actual value (and thus has type *T)
     ByRef,
@@ -94,8 +91,6 @@ pub enum RvalueMode {
     /// `val` is the actual value (*only used for immediates* like ints, ptrs)
     ByValue,
 }
-
-impl Copy for RvalueMode {}
 
 pub fn immediate_rvalue<'tcx>(val: ValueRef, ty: Ty<'tcx>) -> Datum<'tcx, Rvalue> {
     return Datum::new(val, ty, Rvalue::new(ByValue));
@@ -113,15 +108,16 @@ pub fn immediate_rvalue_bcx<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
 /// it. The memory will be dropped upon exit from `scope`. The callback `populate` should
 /// initialize the memory. If `zero` is true, the space will be zeroed when it is allocated; this
 /// is not necessary unless `bcx` does not dominate the end of `scope`.
-pub fn lvalue_scratch_datum<'blk, 'tcx, A>(bcx: Block<'blk, 'tcx>,
-                                           ty: Ty<'tcx>,
-                                           name: &str,
-                                           zero: bool,
-                                           scope: cleanup::ScopeId,
-                                           arg: A,
-                                           populate: |A, Block<'blk, 'tcx>, ValueRef|
-                                                      -> Block<'blk, 'tcx>)
-                                          -> DatumBlock<'blk, 'tcx, Lvalue> {
+pub fn lvalue_scratch_datum<'blk, 'tcx, A, F>(bcx: Block<'blk, 'tcx>,
+                                              ty: Ty<'tcx>,
+                                              name: &str,
+                                              zero: bool,
+                                              scope: cleanup::ScopeId,
+                                              arg: A,
+                                              populate: F)
+                                              -> DatumBlock<'blk, 'tcx, Lvalue> where
+    F: FnOnce(A, Block<'blk, 'tcx>, ValueRef) -> Block<'blk, 'tcx>,
+{
     let scratch = if zero {
         alloca_zeroed(bcx, ty, name)
     } else {
@@ -223,7 +219,7 @@ impl KindOps for Lvalue {
                               val: ValueRef,
                               ty: Ty<'tcx>)
                               -> Block<'blk, 'tcx> {
-        if ty::type_needs_drop(bcx.tcx(), ty) {
+        if type_needs_drop(bcx.tcx(), ty) {
             // cancel cleanup of affine values by zeroing out
             let () = zero_mem(bcx, val, ty);
             bcx
@@ -339,10 +335,10 @@ impl<'tcx> Datum<'tcx, Rvalue> {
 /// here since we can `match self.kind` rather than having to implement
 /// generic methods in `KindOps`.)
 impl<'tcx> Datum<'tcx, Expr> {
-    fn match_kind<R>(self,
-                     if_lvalue: |Datum<'tcx, Lvalue>| -> R,
-                     if_rvalue: |Datum<'tcx, Rvalue>| -> R)
-                     -> R {
+    fn match_kind<R, F, G>(self, if_lvalue: F, if_rvalue: G) -> R where
+        F: FnOnce(Datum<'tcx, Lvalue>) -> R,
+        G: FnOnce(Datum<'tcx, Rvalue>) -> R,
+    {
         let Datum { val, ty, kind } = self;
         match kind {
             LvalueExpr => if_lvalue(Datum::new(val, ty, Lvalue)),
@@ -403,7 +399,7 @@ impl<'tcx> Datum<'tcx, Expr> {
                                  -> DatumBlock<'blk, 'tcx, Lvalue> {
         debug!("to_lvalue_datum self: {}", self.to_string(bcx.ccx()));
 
-        assert!(ty::lltype_is_sized(bcx.tcx(), self.ty),
+        assert!(lltype_is_sized(bcx.tcx(), self.ty),
                 "Trying to convert unsized value to lval");
         self.match_kind(
             |l| DatumBlock::new(bcx, l),
@@ -455,18 +451,20 @@ impl<'tcx> Datum<'tcx, Lvalue> {
     // datum may also be unsized _without the size information_. It is the
     // callers responsibility to package the result in some way to make a valid
     // datum in that case (e.g., by making a fat pointer or opened pair).
-    pub fn get_element<'blk>(&self, bcx: Block<'blk, 'tcx>, ty: Ty<'tcx>,
-                             gep: |ValueRef| -> ValueRef)
-                             -> Datum<'tcx, Lvalue> {
+    pub fn get_element<'blk, F>(&self, bcx: Block<'blk, 'tcx>, ty: Ty<'tcx>,
+                                gep: F)
+                                -> Datum<'tcx, Lvalue> where
+        F: FnOnce(ValueRef) -> ValueRef,
+    {
         let val = match self.ty.sty {
-            _ if ty::type_is_sized(bcx.tcx(), self.ty) => gep(self.val),
+            _ if type_is_sized(bcx.tcx(), self.ty) => gep(self.val),
             ty::ty_open(_) => {
                 let base = Load(bcx, expr::get_dataptr(bcx, self.val));
                 gep(base)
             }
             _ => bcx.tcx().sess.bug(
-                format!("Unexpected unsized type in get_element: {}",
-                        bcx.ty_to_string(self.ty)).as_slice())
+                &format!("Unexpected unsized type in get_element: {}",
+                        bcx.ty_to_string(self.ty))[])
         };
         Datum {
             val: val,
@@ -535,10 +533,10 @@ impl<'tcx, K: KindOps + fmt::Show> Datum<'tcx, K> {
     /// Copies the value into a new location. This function always preserves the existing datum as
     /// a valid value. Therefore, it does not consume `self` and, also, cannot be applied to affine
     /// values (since they must never be duplicated).
-    pub fn shallow_copy<'blk, 'tcx>(&self,
-                                    bcx: Block<'blk, 'tcx>,
-                                    dst: ValueRef)
-                                    -> Block<'blk, 'tcx> {
+    pub fn shallow_copy<'blk>(&self,
+                              bcx: Block<'blk, 'tcx>,
+                              dst: ValueRef)
+                              -> Block<'blk, 'tcx> {
         /*!
          * Copies the value into a new location. This function always
          * preserves the existing datum as a valid value. Therefore,
@@ -546,14 +544,15 @@ impl<'tcx, K: KindOps + fmt::Show> Datum<'tcx, K> {
          * affine values (since they must never be duplicated).
          */
 
-        let param_env = ty::empty_parameter_environment();
-        assert!(!ty::type_moves_by_default(bcx.tcx(), self.ty, &param_env));
+        assert!(!ty::type_moves_by_default(&ty::empty_parameter_environment(bcx.tcx()),
+                                           DUMMY_SP,
+                                           self.ty));
         self.shallow_copy_raw(bcx, dst)
     }
 
     #[allow(dead_code)] // useful for debugging
     pub fn to_string<'a>(&self, ccx: &CrateContext<'a, 'tcx>) -> String {
-        format!("Datum({}, {}, {})",
+        format!("Datum({}, {}, {:?})",
                 ccx.tn().val_to_string(self.val),
                 ty_to_string(ccx.tcx(), self.ty),
                 self.kind)
@@ -570,7 +569,7 @@ impl<'tcx, K: KindOps + fmt::Show> Datum<'tcx, K> {
     /// scalar-ish (like an int or a pointer) which (1) does not require drop glue and (2) is
     /// naturally passed around by value, and not by reference.
     pub fn to_llscalarish<'blk>(self, bcx: Block<'blk, 'tcx>) -> ValueRef {
-        assert!(!ty::type_needs_drop(bcx.tcx(), self.ty));
+        assert!(!type_needs_drop(bcx.tcx(), self.ty));
         assert!(self.appropriate_rvalue_mode(bcx.ccx()) == ByValue);
         if self.kind.is_by_ref() {
             load_ty(bcx, self.val, self.ty)
@@ -580,7 +579,7 @@ impl<'tcx, K: KindOps + fmt::Show> Datum<'tcx, K> {
     }
 
     pub fn to_llbool<'blk>(self, bcx: Block<'blk, 'tcx>) -> ValueRef {
-        assert!(ty::type_is_bool(self.ty))
+        assert!(ty::type_is_bool(self.ty));
         self.to_llscalarish(bcx)
     }
 }

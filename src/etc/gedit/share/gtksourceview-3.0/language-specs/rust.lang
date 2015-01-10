@@ -79,7 +79,9 @@
     <context id="types" style-ref="type">
 		<keyword>bool</keyword>
 		<keyword>int</keyword>
+		<keyword>isize</keyword>
 		<keyword>uint</keyword>
+		<keyword>usize</keyword>
 		<keyword>i8</keyword>
 		<keyword>i16</keyword>
 		<keyword>i32</keyword>
@@ -270,6 +272,7 @@
       '|"|
       \\|n|r|t|0|
       x\%{hex_digit}{2}|
+      u{\%{hex_digit}{1,6}}|
       u\%{hex_digit}{4}|
       U\%{hex_digit}{8}
     </define-regex>

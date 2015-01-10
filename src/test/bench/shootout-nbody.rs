@@ -45,7 +45,7 @@ const SOLAR_MASS: f64 = 4.0 * PI * PI;
 const YEAR: f64 = 365.24;
 const N_BODIES: uint = 5;
 
-static BODIES: [Planet, ..N_BODIES] = [
+static BODIES: [Planet;N_BODIES] = [
     // Sun
     Planet {
         x: 0.0, y: 0.0, z: 0.0,
@@ -102,7 +102,7 @@ struct Planet {
 
 impl Copy for Planet {}
 
-fn advance(bodies: &mut [Planet, ..N_BODIES], dt: f64, steps: int) {
+fn advance(bodies: &mut [Planet;N_BODIES], dt: f64, steps: int) {
     for _ in range(0, steps) {
         let mut b_slice = bodies.as_mut_slice();
         loop {
@@ -135,7 +135,7 @@ fn advance(bodies: &mut [Planet, ..N_BODIES], dt: f64, steps: int) {
     }
 }
 
-fn energy(bodies: &[Planet, ..N_BODIES]) -> f64 {
+fn energy(bodies: &[Planet;N_BODIES]) -> f64 {
     let mut e = 0.0;
     let mut bodies = bodies.iter();
     loop {
@@ -155,7 +155,7 @@ fn energy(bodies: &[Planet, ..N_BODIES]) -> f64 {
     e
 }
 
-fn offset_momentum(bodies: &mut [Planet, ..N_BODIES]) {
+fn offset_momentum(bodies: &mut [Planet;N_BODIES]) {
     let mut px = 0.0;
     let mut py = 0.0;
     let mut pz = 0.0;
@@ -175,7 +175,7 @@ fn main() {
         5000000
     } else {
         std::os::args().as_slice().get(1)
-            .and_then(|arg| from_str(arg.as_slice()))
+            .and_then(|arg| arg.parse())
             .unwrap_or(1000)
     };
     let mut bodies = BODIES;
@@ -202,6 +202,6 @@ fn shift_mut_ref<'a, T>(r: &mut &'a mut [T]) -> Option<&'a mut T> {
         raw.data = raw.data.offset(1);
         raw.len -= 1;
         *r = mem::transmute(raw);
-        Some(unsafe { &mut *ret })
+        Some({ &mut *ret })
     }
 }

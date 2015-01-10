@@ -198,7 +198,7 @@
 //!
 //! So the way we solve this is to add a fourth step that examines the
 //! constraints that refer to skolemized names. Basically, consider a
-//! non-directed verison of the constraint graph. Let `Tainted(x)` be the
+//! non-directed version of the constraint graph. Let `Tainted(x)` be the
 //! set of all things reachable from a skolemized variable `x`.
 //! `Tainted(x)` should not contain any regions that existed before the
 //! step at which the skolemization was performed. So this case here
@@ -249,19 +249,21 @@
 //! in T and try to, in some cases, replace them with bound regions to
 //! yield the final result.
 //!
-//! To decide whether to replace a region `R` that appears in `T` with a
-//! bound region, the algorithms make use of two bits of information.
-//! First is a set `V` that contains all region variables created as part
-//! of the LUB/GLB computation. `V` will contain the region variables
-//! created to replace the bound regions in the input types, but it also
-//! contains 'intermediate' variables created to represent the LUB/GLB of
-//! individual regions.  Basically, when asked to compute the LUB/GLB of a
-//! region variable with another region, the inferencer cannot oblige
-//! immediately since the values of that variables are not known.
-//! Therefore, it creates a new variable that is related to the two
-//! regions.  For example, the LUB of two variables `$x` and `$y` is a
-//! fresh variable `$z` that is constrained such that `$x <= $z` and `$y
-//! <= $z`.  So `V` will contain these intermediate variables as well.
+//! To decide whether to replace a region `R` that appears in `T` with
+//! a bound region, the algorithms make use of two bits of
+//! information.  First is a set `V` that contains all region
+//! variables created as part of the LUB/GLB computation (roughly; see
+//! `region_vars_confined_to_snapshot()` for full details). `V` will
+//! contain the region variables created to replace the bound regions
+//! in the input types, but it also contains 'intermediate' variables
+//! created to represent the LUB/GLB of individual regions.
+//! Basically, when asked to compute the LUB/GLB of a region variable
+//! with another region, the inferencer cannot oblige immediately
+//! since the values of that variables are not known.  Therefore, it
+//! creates a new variable that is related to the two regions.  For
+//! example, the LUB of two variables `$x` and `$y` is a fresh
+//! variable `$z` that is constrained such that `$x <= $z` and `$y <=
+//! $z`.  So `V` will contain these intermediate variables as well.
 //!
 //! The other important factor in deciding how to replace a region in T is
 //! the function `Tainted($r)` which, for a region variable, identifies

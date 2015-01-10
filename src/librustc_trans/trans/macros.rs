@@ -8,9 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![macro_escape]
-
-macro_rules! unpack_datum(
+macro_rules! unpack_datum {
     ($bcx: ident, $inp: expr) => (
         {
             let db = $inp;
@@ -18,9 +16,9 @@ macro_rules! unpack_datum(
             db.datum
         }
     )
-)
+}
 
-macro_rules! unpack_result(
+macro_rules! unpack_result {
     ($bcx: ident, $inp: expr) => (
         {
             let db = $inp;
@@ -28,4 +26,4 @@ macro_rules! unpack_result(
             db.val
         }
     )
-)
+}

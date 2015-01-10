@@ -10,7 +10,8 @@
 
 // no-pretty-expanded FIXME #15189
 
-use std::task;
+use std::thread::Thread;
+use std::sync::mpsc::{channel, Sender};
 
 pub fn main() { println!("===== WITHOUT THREADS ====="); test00(); }
 
@@ -19,7 +20,7 @@ fn test00_start(ch: &Sender<int>, message: int, count: int) {
     let mut i: int = 0;
     while i < count {
         println!("Sending Message");
-        ch.send(message + 0);
+        ch.send(message + 0).unwrap();
         i = i + 1;
     }
     println!("Ending test00_start");
@@ -39,9 +40,9 @@ fn test00() {
     let mut results = Vec::new();
     while i < number_of_tasks {
         let tx = tx.clone();
-        results.push(task::try_future({
+        results.push(Thread::scoped({
             let i = i;
-            proc() {
+            move|| {
                 test00_start(&tx, i, number_of_messages)
             }
         }));
@@ -53,14 +54,14 @@ fn test00() {
     for _r in results.iter() {
         i = 0;
         while i < number_of_messages {
-            let value = rx.recv();
+            let value = rx.recv().unwrap();
             sum += value;
             i = i + 1;
         }
     }
 
     // Join spawned tasks...
-    for r in results.iter_mut() { r.get_ref(); }
+    for r in results.into_iter() { r.join(); }
 
     println!("Completed: Final number is: ");
     println!("{}", sum);

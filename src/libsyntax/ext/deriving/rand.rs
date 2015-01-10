@@ -17,11 +17,13 @@ use ext::deriving::generic::*;
 use ext::deriving::generic::ty::*;
 use ptr::P;
 
-pub fn expand_deriving_rand(cx: &mut ExtCtxt,
-                            span: Span,
-                            mitem: &MetaItem,
-                            item: &Item,
-                            push: |P<Item>|) {
+pub fn expand_deriving_rand<F>(cx: &mut ExtCtxt,
+                               span: Span,
+                               mitem: &MetaItem,
+                               item: &Item,
+                               push: F) where
+    F: FnOnce(P<Item>),
+{
     let trait_def = TraitDef {
         span: span,
         attributes: Vec::new(),
@@ -34,7 +36,6 @@ pub fn expand_deriving_rand(cx: &mut ExtCtxt,
                 generics: LifetimeBounds {
                     lifetimes: Vec::new(),
                     bounds: vec!(("R",
-                                  None,
                                   vec!( Path::new(vec!("std", "rand", "Rng")) )))
                 },
                 explicit_self: None,
@@ -44,7 +45,7 @@ pub fn expand_deriving_rand(cx: &mut ExtCtxt,
                 ),
                 ret_ty: Self,
                 attributes: Vec::new(),
-                combine_substructure: combine_substructure(|a, b, c| {
+                combine_substructure: combine_substructure(box |a, b, c| {
                     rand_substructure(a, b, c)
                 })
             }
@@ -64,7 +65,7 @@ fn rand_substructure(cx: &mut ExtCtxt, trait_span: Span, substr: &Substructure) 
         cx.ident_of("Rand"),
         cx.ident_of("rand")
     );
-    let rand_call = |cx: &mut ExtCtxt, span| {
+    let mut rand_call = |&mut: cx: &mut ExtCtxt, span| {
         cx.expr_call_global(span,
                             rand_ident.clone(),
                             vec!(rng.clone()))
@@ -88,6 +89,7 @@ fn rand_substructure(cx: &mut ExtCtxt, trait_span: Span, substr: &Substructure) 
                                         true,
                                         rand_ident.clone(),
                                         Vec::new(),
+                                        Vec::new(),
                                         Vec::new());
             let rand_name = cx.expr_path(rand_name);
 
@@ -96,13 +98,13 @@ fn rand_substructure(cx: &mut ExtCtxt, trait_span: Span, substr: &Substructure) 
                                        rand_name,
                                        vec!(rng.clone()));
 
-            // need to specify the uint-ness of the random number
-            let uint_ty = cx.ty_ident(trait_span, cx.ident_of("uint"));
+            // need to specify the usize-ness of the random number
+            let usize_ty = cx.ty_ident(trait_span, cx.ident_of("usize"));
             let value_ident = cx.ident_of("__value");
             let let_statement = cx.stmt_let_typed(trait_span,
                                                   false,
                                                   value_ident,
-                                                  uint_ty,
+                                                  usize_ty,
                                                   rv_call);
 
             // rand() % variants.len()
@@ -132,12 +134,14 @@ fn rand_substructure(cx: &mut ExtCtxt, trait_span: Span, substr: &Substructure) 
         _ => cx.bug("Non-static method in `deriving(Rand)`")
     };
 
-    fn rand_thing(cx: &mut ExtCtxt,
-                  trait_span: Span,
-                  ctor_path: ast::Path,
-                  summary: &StaticFields,
-                  rand_call: |&mut ExtCtxt, Span| -> P<Expr>)
-                  -> P<Expr> {
+    fn rand_thing<F>(cx: &mut ExtCtxt,
+                     trait_span: Span,
+                     ctor_path: ast::Path,
+                     summary: &StaticFields,
+                     mut rand_call: F)
+                     -> P<Expr> where
+        F: FnMut(&mut ExtCtxt, Span) -> P<Expr>,
+    {
         let path = cx.expr_path(ctor_path.clone());
         match *summary {
             Unnamed(ref fields) => {

@@ -15,7 +15,7 @@ pub use self::AbiArchitecture::*;
 
 use std::fmt;
 
-#[deriving(PartialEq)]
+#[derive(Copy, PartialEq)]
 pub enum Os {
     OsWindows,
     OsMacos,
@@ -26,9 +26,7 @@ pub enum Os {
     OsDragonfly,
 }
 
-impl Copy for Os {}
-
-#[deriving(PartialEq, Eq, Hash, Encodable, Decodable, Clone)]
+#[derive(PartialEq, Eq, Hash, RustcEncodable, RustcDecodable, Clone, Copy)]
 pub enum Abi {
     // NB: This ordering MUST match the AbiDatas array below.
     // (This is ensured by the test indices_are_correct().)
@@ -48,10 +46,8 @@ pub enum Abi {
     RustCall,
 }
 
-impl Copy for Abi {}
-
 #[allow(non_camel_case_types)]
-#[deriving(PartialEq)]
+#[derive(Copy, PartialEq, Show)]
 pub enum Architecture {
     X86,
     X86_64,
@@ -60,8 +56,7 @@ pub enum Architecture {
     Mipsel
 }
 
-impl Copy for Architecture {}
-
+#[derive(Copy)]
 pub struct AbiData {
     abi: Abi,
 
@@ -69,8 +64,7 @@ pub struct AbiData {
     name: &'static str,
 }
 
-impl Copy for AbiData {}
-
+#[derive(Copy)]
 pub enum AbiArchitecture {
     /// Not a real ABI (e.g., intrinsic)
     RustArch,
@@ -79,9 +73,6 @@ pub enum AbiArchitecture {
     /// Multiple architectures (bitset)
     Archs(u32)
 }
-
-#[allow(non_upper_case_globals)]
-impl Copy for AbiArchitecture {}
 
 #[allow(non_upper_case_globals)]
 static AbiDatas: &'static [AbiData] = &[
@@ -130,11 +121,23 @@ impl Abi {
 
 impl fmt::Show for Abi {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::String::fmt(self, f)
+    }
+}
+
+impl fmt::String for Abi {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "\"{}\"", self.name())
     }
 }
 
 impl fmt::Show for Os {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::String::fmt(self, f)
+    }
+}
+
+impl fmt::String for Os {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             OsLinux => "linux".fmt(f),

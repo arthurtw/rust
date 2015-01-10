@@ -14,7 +14,9 @@ use std::cell::{RefCell, Cell};
 use std::collections::HashMap;
 use std::fmt::Show;
 use std::hash::{Hash, Hasher};
+use std::iter::repeat;
 use std::time::Duration;
+use std::collections::hash_state::HashState;
 
 use syntax::ast;
 use syntax::visit;
@@ -22,12 +24,12 @@ use syntax::visit::Visitor;
 
 // Useful type to use with `Result<>` indicate that an error has already
 // been reported to the user, so no need to continue checking.
-#[deriving(Clone,Show)]
+#[derive(Clone, Copy, Show)]
 pub struct ErrorReported;
 
-impl Copy for ErrorReported {}
-
-pub fn time<T, U>(do_it: bool, what: &str, u: U, f: |U| -> T) -> T {
+pub fn time<T, U, F>(do_it: bool, what: &str, u: U, f: F) -> T where
+    F: FnOnce(U) -> T,
+{
     thread_local!(static DEPTH: Cell<uint> = Cell::new(0));
     if !do_it { return f(u); }
 
@@ -39,24 +41,31 @@ pub fn time<T, U>(do_it: bool, what: &str, u: U, f: |U| -> T) -> T {
 
     let mut u = Some(u);
     let mut rv = None;
-    let dur = Duration::span(|| {
-        rv = Some(f(u.take().unwrap()))
-    });
+    let dur = {
+        let ref mut rvp = rv;
+
+        Duration::span(move || {
+            *rvp = Some(f(u.take().unwrap()))
+        })
+    };
     let rv = rv.unwrap();
 
-    println!("{}time: {}.{:03} \t{}", "  ".repeat(old),
+    println!("{}time: {}.{:03} \t{}", repeat("  ").take(old).collect::<String>(),
              dur.num_seconds(), dur.num_milliseconds() % 1000, what);
     DEPTH.with(|slot| slot.set(old));
 
     rv
 }
 
-pub fn indent<R: Show>(op: || -> R) -> R {
+pub fn indent<R, F>(op: F) -> R where
+    R: Show,
+    F: FnOnce() -> R,
+{
     // Use in conjunction with the log post-processor like `src/etc/indenter`
     // to make debug output more readable.
     debug!(">>");
     let r = op();
-    debug!("<< (Result = {})", r);
+    debug!("<< (Result = {:?})", r);
     r
 }
 
@@ -73,12 +82,12 @@ pub fn indenter() -> Indenter {
     Indenter { _cannot_construct_outside_of_this_module: () }
 }
 
-struct LoopQueryVisitor<'a> {
-    p: |&ast::Expr_|: 'a -> bool,
+struct LoopQueryVisitor<P> where P: FnMut(&ast::Expr_) -> bool {
+    p: P,
     flag: bool,
 }
 
-impl<'a, 'v> Visitor<'v> for LoopQueryVisitor<'a> {
+impl<'v, P> Visitor<'v> for LoopQueryVisitor<P> where P: FnMut(&ast::Expr_) -> bool {
     fn visit_expr(&mut self, e: &ast::Expr) {
         self.flag |= (self.p)(&e.node);
         match e.node {
@@ -92,7 +101,7 @@ impl<'a, 'v> Visitor<'v> for LoopQueryVisitor<'a> {
 
 // Takes a predicate p, returns true iff p is true for any subexpressions
 // of b -- skipping any inner loops (loop, while, loop_body)
-pub fn loop_query(b: &ast::Block, p: |&ast::Expr_| -> bool) -> bool {
+pub fn loop_query<P>(b: &ast::Block, p: P) -> bool where P: FnMut(&ast::Expr_) -> bool {
     let mut v = LoopQueryVisitor {
         p: p,
         flag: false,
@@ -101,12 +110,12 @@ pub fn loop_query(b: &ast::Block, p: |&ast::Expr_| -> bool) -> bool {
     return v.flag;
 }
 
-struct BlockQueryVisitor<'a> {
-    p: |&ast::Expr|: 'a -> bool,
+struct BlockQueryVisitor<P> where P: FnMut(&ast::Expr) -> bool {
+    p: P,
     flag: bool,
 }
 
-impl<'a, 'v> Visitor<'v> for BlockQueryVisitor<'a> {
+impl<'v, P> Visitor<'v> for BlockQueryVisitor<P> where P: FnMut(&ast::Expr) -> bool {
     fn visit_expr(&mut self, e: &ast::Expr) {
         self.flag |= (self.p)(e);
         visit::walk_expr(self, e)
@@ -115,7 +124,7 @@ impl<'a, 'v> Visitor<'v> for BlockQueryVisitor<'a> {
 
 // Takes a predicate p, returns true iff p is true for any subexpressions
 // of b -- skipping any inner loops (loop, while, loop_body)
-pub fn block_query(b: &ast::Block, p: |&ast::Expr| -> bool) -> bool {
+pub fn block_query<P>(b: &ast::Block, p: P) -> bool where P: FnMut(&ast::Expr) -> bool {
     let mut v = BlockQueryVisitor {
         p: p,
         flag: false,
@@ -132,11 +141,11 @@ pub fn block_query(b: &ast::Block, p: |&ast::Expr| -> bool) -> bool {
 /// Efficiency note: This is implemented in an inefficient way because it is typically invoked on
 /// very small graphs. If the graphs become larger, a more efficient graph representation and
 /// algorithm would probably be advised.
-pub fn can_reach<S,H:Hasher<S>,T:Eq+Clone+Hash<S>>(
-    edges_map: &HashMap<T,Vec<T>,H>,
-    source: T,
-    destination: T)
-    -> bool
+pub fn can_reach<T, S>(edges_map: &HashMap<T, Vec<T>, S>, source: T,
+                       destination: T) -> bool
+    where S: HashState,
+          <S as HashState>::Hasher: Hasher<Output=u64>,
+          T: Hash< <S as HashState>::Hasher> + Eq + Clone,
 {
     if source == destination {
         return true;
@@ -194,11 +203,13 @@ pub fn can_reach<S,H:Hasher<S>,T:Eq+Clone+Hash<S>>(
 /// }
 /// ```
 #[inline(always)]
-pub fn memoized<T: Clone + Hash<S> + Eq, U: Clone, S, H: Hasher<S>>(
-    cache: &RefCell<HashMap<T, U, H>>,
-    arg: T,
-    f: |T| -> U
-) -> U {
+pub fn memoized<T, U, S, F>(cache: &RefCell<HashMap<T, U, S>>, arg: T, f: F) -> U
+    where T: Clone + Hash<<S as HashState>::Hasher> + Eq,
+          U: Clone,
+          S: HashState,
+          <S as HashState>::Hasher: Hasher<Output=u64>,
+          F: FnOnce(T) -> U,
+{
     let key = arg.clone();
     let result = cache.borrow().get(&key).map(|result| result.clone());
     match result {

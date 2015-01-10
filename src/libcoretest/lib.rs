@@ -7,11 +7,16 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
-#![feature(globs, unsafe_destructor, macro_rules, slicing_syntax)]
+
+#![feature(unsafe_destructor, slicing_syntax)]
+#![feature(unboxed_closures)]
+#![feature(box_syntax)]
+#![allow(unknown_features)] #![feature(int_uint)]
 
 extern crate core;
 extern crate test;
 extern crate libc;
+extern crate unicode;
 
 mod any;
 mod atomic;
@@ -20,13 +25,14 @@ mod char;
 mod cmp;
 mod finally;
 mod fmt;
+mod hash;
 mod iter;
 mod mem;
+mod nonzero;
 mod num;
 mod ops;
 mod option;
 mod ptr;
-mod raw;
 mod result;
 mod slice;
 mod str;

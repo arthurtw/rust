@@ -14,17 +14,22 @@ use std::os;
 use std::io::IoError;
 use syntax::ast;
 
-pub struct RPathConfig<'a> {
+pub struct RPathConfig<F, G> where
+    F: FnOnce() -> Path,
+    G: FnMut(&Path) -> Result<Path, IoError>,
+{
     pub used_crates: Vec<(ast::CrateNum, Option<Path>)>,
     pub out_filename: Path,
     pub is_like_osx: bool,
     pub has_rpath: bool,
-    pub get_install_prefix_lib_path: ||:'a -> Path,
-    pub realpath: |&Path|:'a -> Result<Path, IoError>
+    pub get_install_prefix_lib_path: F,
+    pub realpath: G,
 }
 
-pub fn get_rpath_flags(config: RPathConfig) -> Vec<String> {
-
+pub fn get_rpath_flags<F, G>(config: RPathConfig<F, G>) -> Vec<String> where
+    F: FnOnce() -> Path,
+    G: FnMut(&Path) -> Result<Path, IoError>,
+{
     // No rpath on windows
     if !config.has_rpath {
         return Vec::new();
@@ -39,25 +44,27 @@ pub fn get_rpath_flags(config: RPathConfig) -> Vec<String> {
         l.map(|p| p.clone())
     }).collect::<Vec<_>>();
 
-    let rpaths = get_rpaths(config, libs.as_slice());
-    flags.push_all(rpaths_to_flags(rpaths.as_slice()).as_slice());
+    let rpaths = get_rpaths(config, &libs[]);
+    flags.push_all(&rpaths_to_flags(&rpaths[])[]);
     flags
 }
 
 fn rpaths_to_flags(rpaths: &[String]) -> Vec<String> {
     let mut ret = Vec::new();
     for rpath in rpaths.iter() {
-        ret.push(format!("-Wl,-rpath,{}", (*rpath).as_slice()));
+        ret.push(format!("-Wl,-rpath,{}", &(*rpath)[]));
     }
     return ret;
 }
 
-fn get_rpaths(mut config: RPathConfig,
-              libs: &[Path]) -> Vec<String> {
-    debug!("output: {}", config.out_filename.display());
+fn get_rpaths<F, G>(mut config: RPathConfig<F, G>, libs: &[Path]) -> Vec<String> where
+    F: FnOnce() -> Path,
+    G: FnMut(&Path) -> Result<Path, IoError>,
+{
+    debug!("output: {:?}", config.out_filename.display());
     debug!("libs:");
     for libpath in libs.iter() {
-        debug!("    {}", libpath.display());
+        debug!("    {:?}", libpath.display());
     }
 
     // Use relative paths to the libraries. Binaries can be moved
@@ -75,24 +82,29 @@ fn get_rpaths(mut config: RPathConfig,
         }
     }
 
-    log_rpaths("relative", rel_rpaths.as_slice());
-    log_rpaths("fallback", fallback_rpaths.as_slice());
+    log_rpaths("relative", &rel_rpaths[]);
+    log_rpaths("fallback", &fallback_rpaths[]);
 
     let mut rpaths = rel_rpaths;
-    rpaths.push_all(fallback_rpaths.as_slice());
+    rpaths.push_all(&fallback_rpaths[]);
 
     // Remove duplicates
-    let rpaths = minimize_rpaths(rpaths.as_slice());
+    let rpaths = minimize_rpaths(&rpaths[]);
     return rpaths;
 }
 
-fn get_rpaths_relative_to_output(config: &mut RPathConfig,
-                                 libs: &[Path]) -> Vec<String> {
+fn get_rpaths_relative_to_output<F, G>(config: &mut RPathConfig<F, G>,
+                                       libs: &[Path]) -> Vec<String> where
+    F: FnOnce() -> Path,
+    G: FnMut(&Path) -> Result<Path, IoError>,
+{
     libs.iter().map(|a| get_rpath_relative_to_output(config, a)).collect()
 }
 
-fn get_rpath_relative_to_output(config: &mut RPathConfig,
-                                lib: &Path) -> String {
+fn get_rpath_relative_to_output<F, G>(config: &mut RPathConfig<F, G>, lib: &Path) -> String where
+    F: FnOnce() -> Path,
+    G: FnMut(&Path) -> Result<Path, IoError>,
+{
     use std::os;
 
     // Mac doesn't appear to support $ORIGIN
@@ -114,7 +126,10 @@ fn get_rpath_relative_to_output(config: &mut RPathConfig,
             relative.as_str().expect("non-utf8 component in path"))
 }
 
-fn get_install_prefix_rpath(config: RPathConfig) -> String {
+fn get_install_prefix_rpath<F, G>(config: RPathConfig<F, G>) -> String where
+    F: FnOnce() -> Path,
+    G: FnMut(&Path) -> Result<Path, IoError>,
+{
     let path = (config.get_install_prefix_lib_path)();
     let path = os::make_absolute(&path).unwrap();
     // FIXME (#9639): This needs to handle non-utf8 paths
@@ -125,7 +140,7 @@ fn minimize_rpaths(rpaths: &[String]) -> Vec<String> {
     let mut set = HashSet::new();
     let mut minimized = Vec::new();
     for rpath in rpaths.iter() {
-        if set.insert(rpath.as_slice()) {
+        if set.insert(&rpath[]) {
             minimized.push(rpath.clone());
         }
     }
@@ -200,22 +215,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(target_os = "freebsd")]
-    fn test_rpath_relative() {
-        let config = &mut RPathConfig {
-            used_crates: Vec::new(),
-            has_rpath: true,
-            is_like_osx: false,
-            out_filename: Path::new("bin/rustc"),
-            get_install_prefix_lib_path: || panic!(),
-            realpath: |p| Ok(p.clone())
-        };
-        let res = get_rpath_relative_to_output(config, &Path::new("lib/libstd.so"));
-        assert_eq!(res, "$ORIGIN/../lib");
-    }
-
-    #[test]
-    #[cfg(target_os = "dragonfly")]
+    #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
     fn test_rpath_relative() {
         let config = &mut RPathConfig {
             used_crates: Vec::new(),

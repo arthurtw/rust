@@ -30,7 +30,7 @@ pub fn expand_option_env<'cx>(cx: &'cx mut ExtCtxt, sp: Span, tts: &[ast::TokenT
         Some(v) => v
     };
 
-    let e = match os::getenv(var.as_slice()) {
+    let e = match os::getenv(&var[]) {
       None => {
           cx.expr_path(cx.path_all(sp,
                                    true,
@@ -45,7 +45,8 @@ pub fn expand_option_env<'cx>(cx: &'cx mut ExtCtxt, sp: Span, tts: &[ast::TokenT
                                                    Some(cx.lifetime(sp,
                                                         cx.ident_of(
                                                             "'static").name)),
-                                                   ast::MutImmutable))))
+                                                   ast::MutImmutable)),
+                                   Vec::new()))
       }
       Some(s) => {
           cx.expr_call_global(sp,
@@ -55,7 +56,7 @@ pub fn expand_option_env<'cx>(cx: &'cx mut ExtCtxt, sp: Span, tts: &[ast::TokenT
                                    cx.ident_of("Some")),
                               vec!(cx.expr_str(sp,
                                                token::intern_and_get_ident(
-                                          s.as_slice()))))
+                                          &s[]))))
       }
     };
     MacExpr::new(e)
@@ -80,9 +81,9 @@ pub fn expand_env<'cx>(cx: &'cx mut ExtCtxt, sp: Span, tts: &[ast::TokenTree])
     };
     let msg = match exprs.next() {
         None => {
-            token::intern_and_get_ident(format!("environment variable `{}` \
+            token::intern_and_get_ident(&format!("environment variable `{}` \
                                                  not defined",
-                                                var).as_slice())
+                                                var)[])
         }
         Some(second) => {
             match expr_to_string(cx, second, "expected string literal") {
@@ -105,7 +106,7 @@ pub fn expand_env<'cx>(cx: &'cx mut ExtCtxt, sp: Span, tts: &[ast::TokenTree])
             cx.span_err(sp, msg.get());
             cx.expr_uint(sp, 0)
         }
-        Some(s) => cx.expr_str(sp, token::intern_and_get_ident(s.as_slice()))
+        Some(s) => cx.expr_str(sp, token::intern_and_get_ident(&s[]))
     };
     MacExpr::new(e)
 }

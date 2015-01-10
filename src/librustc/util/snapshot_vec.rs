@@ -14,17 +14,16 @@
 //!
 //! This vector is intended to be used as part of an abstraction, not serve as a complete
 //! abstraction on its own. As such, while it will roll back most changes on its own, it also
-//! supports a `get_mut` operation that gives you an abitrary mutable pointer into the vector. To
+//! supports a `get_mut` operation that gives you an arbitrary mutable pointer into the vector. To
 //! ensure that any changes you make this with this pointer are rolled back, you must invoke
 //! `record` to record any changes you make and also supplying a delegate capable of reversing
 //! those changes.
 use self::UndoLog::*;
 
-use std::kinds::marker;
 use std::mem;
 
-#[deriving(PartialEq)]
-enum UndoLog<T,U> {
+#[derive(PartialEq)]
+pub enum UndoLog<T,U> {
     /// Indicates where a snapshot started.
     OpenSnapshot,
 
@@ -47,10 +46,9 @@ pub struct SnapshotVec<T,U,D> {
     delegate: D
 }
 
+// Snapshots are tokens that should be created/consumed linearly.
+#[allow(missing_copy_implementations)]
 pub struct Snapshot {
-    // Snapshots are tokens that should be created/consumed linearly.
-    marker: marker::NoCopy,
-
     // Length of the undo log at the time the snapshot was taken.
     length: uint,
 }
@@ -112,8 +110,13 @@ impl<T,U,D:SnapshotVecDelegate<T,U>> SnapshotVec<T,U,D> {
     pub fn start_snapshot(&mut self) -> Snapshot {
         let length = self.undo_log.len();
         self.undo_log.push(OpenSnapshot);
-        Snapshot { length: length,
-                   marker: marker::NoCopy }
+        Snapshot { length: length }
+    }
+
+    pub fn actions_since_snapshot(&self,
+                                  snapshot: &Snapshot)
+                                  -> &[UndoLog<T,U>] {
+        &self.undo_log[snapshot.length..]
     }
 
     fn assert_open_snapshot(&self, snapshot: &Snapshot) {

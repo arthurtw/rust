@@ -12,21 +12,21 @@
 
 #![allow(missing_docs)]
 
-pub use self::ExponentFormat::*;
-pub use self::SignificantDigits::*;
-pub use self::SignFormat::*;
+use self::ExponentFormat::*;
+use self::SignificantDigits::*;
+use self::SignFormat::*;
 
-use char;
-use char::Char;
-use kinds::Copy;
-use num;
-use num::{Int, Float, FPNaN, FPInfinite, ToPrimitive};
-use slice::{SlicePrelude, CloneSliceAllocPrelude};
-use str::StrPrelude;
+use char::{self, CharExt};
+use num::{self, Int, Float, ToPrimitive};
+use num::FpCategory as Fp;
+use ops::FnMut;
+use slice::SliceExt;
+use str::StrExt;
 use string::String;
 use vec::Vec;
 
 /// A flag that specifies whether to use exponential (scientific) notation.
+#[derive(Copy)]
 pub enum ExponentFormat {
     /// Do not use exponential notation.
     ExpNone,
@@ -39,10 +39,9 @@ pub enum ExponentFormat {
     ExpBin,
 }
 
-impl Copy for ExponentFormat {}
-
 /// The number of digits used for emitting the fractional part of a number, if
 /// any.
+#[derive(Copy)]
 pub enum SignificantDigits {
     /// All calculable digits will be printed.
     ///
@@ -58,9 +57,8 @@ pub enum SignificantDigits {
     DigExact(uint)
 }
 
-impl Copy for SignificantDigits {}
-
 /// How to emit the sign of a number.
+#[derive(Copy)]
 pub enum SignFormat {
     /// No sign will be printed. The exponent sign will also be emitted.
     SignNone,
@@ -72,34 +70,29 @@ pub enum SignFormat {
     SignAll,
 }
 
-impl Copy for SignFormat {}
-
-/**
- * Converts an integral number to its string representation as a byte vector.
- * This is meant to be a common base implementation for all integral string
- * conversion functions like `to_string()` or `to_str_radix()`.
- *
- * # Arguments
- * - `num`           - The number to convert. Accepts any number that
- *                     implements the numeric traits.
- * - `radix`         - Base to use. Accepts only the values 2-36.
- * - `sign`          - How to emit the sign. Options are:
- *     - `SignNone`: No sign at all. Basically emits `abs(num)`.
- *     - `SignNeg`:  Only `-` on negative values.
- *     - `SignAll`:  Both `+` on positive, and `-` on negative numbers.
- * - `f`             - a callback which will be invoked for each ascii character
- *                     which composes the string representation of this integer
- *
- * # Return value
- * A tuple containing the byte vector, and a boolean flag indicating
- * whether it represents a special value like `inf`, `-inf`, `NaN` or not.
- * It returns a tuple because there can be ambiguity between a special value
- * and a number representation at higher bases.
- *
- * # Failure
- * - Fails if `radix` < 2 or `radix` > 36.
- */
-fn int_to_str_bytes_common<T: Int>(num: T, radix: uint, sign: SignFormat, f: |u8|) {
+/// Converts an integral number to its string representation as a byte vector.
+/// This is meant to be a common base implementation for all integral string
+/// conversion functions like `to_string()` or `to_str_radix()`.
+///
+/// # Arguments
+///
+/// - `num`           - The number to convert. Accepts any number that
+///                     implements the numeric traits.
+/// - `radix`         - Base to use. Accepts only the values 2-36.
+/// - `sign`          - How to emit the sign. Options are:
+///     - `SignNone`: No sign at all. Basically emits `abs(num)`.
+///     - `SignNeg`:  Only `-` on negative values.
+///     - `SignAll`:  Both `+` on positive, and `-` on negative numbers.
+/// - `f`             - a callback which will be invoked for each ascii character
+///                     which composes the string representation of this integer
+///
+/// # Panics
+///
+/// - Panics if `radix` < 2 or `radix` > 36.
+fn int_to_str_bytes_common<T, F>(num: T, radix: uint, sign: SignFormat, mut f: F) where
+    T: Int,
+    F: FnMut(u8),
+{
     assert!(2 <= radix && radix <= 36);
 
     let _0: T = Int::zero();
@@ -111,7 +104,7 @@ fn int_to_str_bytes_common<T: Int>(num: T, radix: uint, sign: SignFormat, f: |u8
     // This is just for integral types, the largest of which is a u64. The
     // smallest base that we can have is 2, so the most number of digits we're
     // ever going to have is 64
-    let mut buf = [0u8, ..64];
+    let mut buf = [0u8; 64];
     let mut cur = 0;
 
     // Loop at least once to make sure at least a `0` gets emitted.
@@ -207,14 +200,14 @@ pub fn float_to_str_bytes_common<T: Float>(
     let _1: T = Float::one();
 
     match num.classify() {
-        FPNaN => { return (b"NaN".to_vec(), true); }
-        FPInfinite if num > _0 => {
+        Fp::Nan => { return (b"NaN".to_vec(), true); }
+        Fp::Infinite if num > _0 => {
             return match sign {
                 SignAll => (b"+inf".to_vec(), true),
                 _       => (b"inf".to_vec(), true)
             };
         }
-        FPInfinite if num < _0 => {
+        Fp::Infinite if num < _0 => {
             return match sign {
                 SignNone => (b"inf".to_vec(), true),
                 _        => (b"-inf".to_vec(), true),
@@ -328,10 +321,10 @@ pub fn float_to_str_bytes_common<T: Float>(
         // cut off the one extra digit, and depending on its value
         // round the remaining ones.
         if limit_digits && dig == digit_count {
-            let ascii2value = |chr: u8| {
+            let ascii2value = |&: chr: u8| {
                 (chr as char).to_digit(radix).unwrap()
             };
-            let value2ascii = |val: uint| {
+            let value2ascii = |&: val: uint| {
                 char::from_digit(val, radix).unwrap() as u8
             };
 
@@ -415,10 +408,8 @@ pub fn float_to_str_bytes_common<T: Float>(
     (buf, false)
 }
 
-/**
- * Converts a number to its string representation. This is a wrapper for
- * `to_str_bytes_common()`, for details see there.
- */
+/// Converts a number to its string representation. This is a wrapper for
+/// `to_str_bytes_common()`, for details see there.
 #[inline]
 pub fn float_to_str_common<T: Float>(
         num: T, radix: uint, negative_zero: bool,

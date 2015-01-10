@@ -23,8 +23,8 @@ use metadata::loader;
 use util::nodemap::{FnvHashMap, NodeMap};
 
 use std::cell::RefCell;
-use std::c_vec::CVec;
 use std::rc::Rc;
+use flate::Bytes;
 use syntax::ast;
 use syntax::codemap::Span;
 use syntax::parse::token::IdentInterner;
@@ -36,7 +36,7 @@ use syntax::parse::token::IdentInterner;
 pub type cnum_map = FnvHashMap<ast::CrateNum, ast::CrateNum>;
 
 pub enum MetadataBlob {
-    MetadataVec(CVec<u8>),
+    MetadataVec(Bytes),
     MetadataArchive(loader::ArchiveMetadata),
 }
 
@@ -48,26 +48,22 @@ pub struct crate_metadata {
     pub span: Span,
 }
 
-#[deriving(Show, PartialEq, Clone)]
+#[derive(Copy, Show, PartialEq, Clone)]
 pub enum LinkagePreference {
     RequireDynamic,
     RequireStatic,
 }
 
-impl Copy for LinkagePreference {}
-
-#[deriving(Clone, PartialEq, FromPrimitive)]
+#[derive(Copy, Clone, PartialEq, FromPrimitive)]
 pub enum NativeLibraryKind {
     NativeStatic,    // native static library (.a archive)
     NativeFramework, // OSX-specific
     NativeUnknown,   // default way to specify a dynamic library
 }
 
-impl Copy for NativeLibraryKind {}
-
 // Where a crate came from on the local filesystem. One of these two options
 // must be non-None.
-#[deriving(PartialEq, Clone)]
+#[derive(PartialEq, Clone)]
 pub struct CrateSource {
     pub dylib: Option<Path>,
     pub rlib: Option<Path>,
@@ -113,16 +109,18 @@ impl CStore {
         self.metas.borrow_mut().insert(cnum, data);
     }
 
-    pub fn iter_crate_data(&self, i: |ast::CrateNum, &crate_metadata|) {
+    pub fn iter_crate_data<I>(&self, mut i: I) where
+        I: FnMut(ast::CrateNum, &crate_metadata),
+    {
         for (&k, v) in self.metas.borrow().iter() {
             i(k, &**v);
         }
     }
 
     /// Like `iter_crate_data`, but passes source paths (if available) as well.
-    pub fn iter_crate_data_origins(&self, i: |ast::CrateNum,
-                                              &crate_metadata,
-                                              Option<CrateSource>|) {
+    pub fn iter_crate_data_origins<I>(&self, mut i: I) where
+        I: FnMut(ast::CrateNum, &crate_metadata, Option<CrateSource>),
+    {
         for (&k, v) in self.metas.borrow().iter() {
             let origin = self.get_used_crate_source(k);
             origin.as_ref().map(|cs| { assert!(k == cs.cnum); });
@@ -236,13 +234,17 @@ impl MetadataBlob {
             MetadataArchive(ref ar) => ar.as_slice(),
         };
         if slice.len() < 4 {
-            &[]
+            &[] // corrupt metadata
         } else {
-            let len = ((slice[0] as u32) << 24) |
-                      ((slice[1] as u32) << 16) |
-                      ((slice[2] as u32) << 8) |
-                      ((slice[3] as u32) << 0);
-            slice.slice(4, len as uint + 4)
+            let len = (((slice[0] as u32) << 24) |
+                       ((slice[1] as u32) << 16) |
+                       ((slice[2] as u32) << 8) |
+                       ((slice[3] as u32) << 0)) as uint;
+            if len + 4 <= slice.len() {
+                slice.slice(4, len + 4)
+            } else {
+                &[] // corrupt or old metadata
+            }
         }
     }
 }

@@ -12,43 +12,39 @@
 
 pub use self::FileMatch::*;
 
-use std::cell::RefCell;
 use std::collections::HashSet;
 use std::io::fs::PathExtensions;
 use std::io::fs;
 use std::os;
 
 use util::fs as myfs;
+use session::search_paths::{SearchPaths, PathKind};
 
+#[derive(Copy)]
 pub enum FileMatch {
     FileMatches,
     FileDoesntMatch,
 }
 
-impl Copy for FileMatch {}
-
 // A module for searching for libraries
 // FIXME (#2658): I'm not happy how this module turned out. Should
 // probably just be folded into cstore.
 
-/// Functions with type `pick` take a parent directory as well as
-/// a file found in that directory.
-pub type pick<'a> = |path: &Path|: 'a -> FileMatch;
-
 pub struct FileSearch<'a> {
     pub sysroot: &'a Path,
-    pub addl_lib_search_paths: &'a RefCell<Vec<Path>>,
+    pub search_paths: &'a SearchPaths,
     pub triple: &'a str,
+    pub kind: PathKind,
 }
 
 impl<'a> FileSearch<'a> {
-    pub fn for_each_lib_search_path(&self, f: |&Path| -> FileMatch) {
+    pub fn for_each_lib_search_path<F>(&self, mut f: F) where
+        F: FnMut(&Path) -> FileMatch,
+    {
         let mut visited_dirs = HashSet::new();
         let mut found = false;
 
-        debug!("filesearch: searching additional lib search paths [{}]",
-               self.addl_lib_search_paths.borrow().len());
-        for path in self.addl_lib_search_paths.borrow().iter() {
+        for path in self.search_paths.iter(self.kind) {
             match f(path) {
                 FileMatches => found = true,
                 FileDoesntMatch => ()
@@ -95,7 +91,7 @@ impl<'a> FileSearch<'a> {
         make_target_lib_path(self.sysroot, self.triple)
     }
 
-    pub fn search(&self, pick: pick) {
+    pub fn search<F>(&self, mut pick: F) where F: FnMut(&Path) -> FileMatch {
         self.for_each_lib_search_path(|lib_search_path| {
             debug!("searching {}", lib_search_path.display());
             match fs::readdir(lib_search_path) {
@@ -132,12 +128,14 @@ impl<'a> FileSearch<'a> {
 
     pub fn new(sysroot: &'a Path,
                triple: &'a str,
-               addl_lib_search_paths: &'a RefCell<Vec<Path>>) -> FileSearch<'a> {
+               search_paths: &'a SearchPaths,
+               kind: PathKind) -> FileSearch<'a> {
         debug!("using sysroot = {}, triple = {}", sysroot.display(), triple);
         FileSearch {
             sysroot: sysroot,
-            addl_lib_search_paths: addl_lib_search_paths,
+            search_paths: search_paths,
             triple: triple,
+            kind: kind,
         }
     }
 
@@ -274,12 +272,12 @@ fn find_libdir(sysroot: &Path) -> String {
         }
     }
 
-    #[cfg(target_word_size = "64")]
+    #[cfg(any(all(stage0, target_word_size = "64"), all(not(stage0), target_pointer_width = "64")))]
     fn primary_libdir_name() -> String {
         "lib64".to_string()
     }
 
-    #[cfg(target_word_size = "32")]
+    #[cfg(any(all(stage0, target_word_size = "32"), all(not(stage0), target_pointer_width = "32")))]
     fn primary_libdir_name() -> String {
         "lib32".to_string()
     }

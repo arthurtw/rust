@@ -9,9 +9,9 @@
 // except according to those terms.
 
 enum Foo {
-    Variant { x: uint }
+    Variant { x: usize }
 }
 
 fn main() {
-    let f = Foo::Variant(42u); //~ ERROR expected function, found `Foo`
+    let f = Foo::Variant(42us); //~ ERROR uses it like a function
 }

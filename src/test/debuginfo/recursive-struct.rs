@@ -69,6 +69,8 @@
 // gdb-command:continue
 
 #![allow(unused_variables)]
+#![feature(box_syntax)]
+#![omit_gdb_pretty_printer_section]
 
 use self::Opt::{Empty, Val};
 
@@ -143,7 +145,7 @@ fn main() {
         value: 2,
     };
 
-    let vec_unique: [UniqueNode<f32>, ..1] = [UniqueNode {
+    let vec_unique: [UniqueNode<f32>; 1] = [UniqueNode {
         next: Val {
             val: box UniqueNode {
                 next: Empty,

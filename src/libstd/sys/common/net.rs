@@ -8,29 +8,31 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-pub use self::SocketStatus::*;
-pub use self::InAddr::*;
+use prelude::v1::*;
+use self::SocketStatus::*;
+use self::InAddr::*;
 
-use alloc::arc::Arc;
-use libc::{mod, c_char, c_int};
+use ffi::CString;
+use ffi;
+use io::net::addrinfo;
+use io::net::ip::{SocketAddr, IpAddr, Ipv4Addr, Ipv6Addr};
+use io::{IoResult, IoError};
+use libc::{self, c_char, c_int};
 use mem;
 use num::Int;
-use ptr::{mod, null, null_mut};
-use io::net::ip::{SocketAddr, IpAddr, Ipv4Addr, Ipv6Addr};
-use io::net::addrinfo;
-use io::{IoResult, IoError};
-use sys::{mod, retry, c, sock_t, last_error, last_net_error, last_gai_error, close_sock,
+use ptr::{self, null, null_mut};
+use str;
+use sys::{self, retry, c, sock_t, last_error, last_net_error, last_gai_error, close_sock,
           wrlen, msglen_t, os, wouldblock, set_nonblocking, timer, ms_to_timeval,
           decode_error_detailed};
-use sync::{Mutex, MutexGuard};
-use sys_common::{mod, keep_going, short_write, timeout};
-use prelude::*;
+use sync::{Arc, Mutex, MutexGuard};
+use sys_common::{self, keep_going, short_write, timeout};
 use cmp;
 use io;
 
 // FIXME: move uses of Arc and deadline tracking to std::io
 
-#[deriving(Show)]
+#[derive(Show)]
 pub enum SocketStatus {
     Readable,
     Writable,
@@ -55,10 +57,10 @@ pub enum InAddr {
 pub fn ip_to_inaddr(ip: IpAddr) -> InAddr {
     match ip {
         Ipv4Addr(a, b, c, d) => {
-            let ip = (a as u32 << 24) |
-                     (b as u32 << 16) |
-                     (c as u32 <<  8) |
-                     (d as u32 <<  0);
+            let ip = ((a as u32) << 24) |
+                     ((b as u32) << 16) |
+                     ((c as u32) <<  8) |
+                     ((d as u32) <<  0);
             In4Addr(libc::in_addr {
                 s_addr: Int::from_be(ip)
             })
@@ -233,9 +235,9 @@ pub fn get_host_addresses(host: Option<&str>, servname: Option<&str>,
 
     assert!(host.is_some() || servname.is_some());
 
-    let c_host = host.map(|x| x.to_c_str());
+    let c_host = host.map(|x| CString::from_slice(x.as_bytes()));
     let c_host = c_host.as_ref().map(|x| x.as_ptr()).unwrap_or(null());
-    let c_serv = servname.map(|x| x.to_c_str());
+    let c_serv = servname.map(|x| CString::from_slice(x.as_bytes()));
     let c_serv = c_serv.as_ref().map(|x| x.as_ptr()).unwrap_or(null());
 
     let hint = hint.map(|hint| {
@@ -269,7 +271,7 @@ pub fn get_host_addresses(host: Option<&str>, servname: Option<&str>,
     // Collect all the results we found
     let mut addrs = Vec::new();
     let mut rp = res;
-    while rp.is_not_null() {
+    while !rp.is_null() {
         unsafe {
             let addr = try!(sockaddr_to_addr(mem::transmute((*rp).ai_addr),
                                              (*rp).ai_addrlen as uint));
@@ -288,6 +290,44 @@ pub fn get_host_addresses(host: Option<&str>, servname: Option<&str>,
     unsafe { freeaddrinfo(res); }
 
     Ok(addrs)
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// get_address_name
+////////////////////////////////////////////////////////////////////////////////
+
+extern "system" {
+    fn getnameinfo(sa: *const libc::sockaddr, salen: libc::socklen_t,
+        host: *mut c_char, hostlen: libc::size_t,
+        serv: *mut c_char, servlen: libc::size_t,
+        flags: c_int) -> c_int;
+}
+
+const NI_MAXHOST: uint = 1025;
+
+pub fn get_address_name(addr: IpAddr) -> Result<String, IoError> {
+    let addr = SocketAddr{ip: addr, port: 0};
+
+    let mut storage: libc::sockaddr_storage = unsafe { mem::zeroed() };
+    let len = addr_to_sockaddr(addr, &mut storage);
+
+    let mut hostbuf = [0 as c_char; NI_MAXHOST];
+
+    let res = unsafe {
+        getnameinfo(&storage as *const _ as *const libc::sockaddr, len,
+            hostbuf.as_mut_ptr(), NI_MAXHOST as libc::size_t,
+            ptr::null_mut(), 0,
+            0)
+    };
+
+    if res != 0 {
+        return Err(last_gai_error(res));
+    }
+
+    unsafe {
+        Ok(str::from_utf8(ffi::c_str_to_bytes(&hostbuf.as_ptr()))
+               .unwrap().to_string())
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -344,10 +384,10 @@ pub fn get_host_addresses(host: Option<&str>, servname: Option<&str>,
 // [1] http://twistedmatrix.com/pipermail/twisted-commits/2012-April/034692.html
 // [2] http://stackoverflow.com/questions/19819198/does-send-msg-dontwait
 
-pub fn read<T>(fd: sock_t,
-               deadline: u64,
-               lock: || -> T,
-               read: |bool| -> libc::c_int) -> IoResult<uint> {
+pub fn read<T, L, R>(fd: sock_t, deadline: u64, mut lock: L, mut read: R) -> IoResult<uint> where
+    L: FnMut() -> T,
+    R: FnMut(bool) -> libc::c_int,
+{
     let mut ret = -1;
     if deadline == 0 {
         ret = retry(|| read(false));
@@ -386,12 +426,15 @@ pub fn read<T>(fd: sock_t,
     }
 }
 
-pub fn write<T>(fd: sock_t,
-                deadline: u64,
-                buf: &[u8],
-                write_everything: bool,
-                lock: || -> T,
-                write: |bool, *const u8, uint| -> i64) -> IoResult<uint> {
+pub fn write<T, L, W>(fd: sock_t,
+                      deadline: u64,
+                      buf: &[u8],
+                      write_everything: bool,
+                      mut lock: L,
+                      mut write: W) -> IoResult<uint> where
+    L: FnMut() -> T,
+    W: FnMut(bool, *const u8, uint) -> i64,
+{
     let mut ret = -1;
     let mut written = 0;
     if deadline == 0 {
@@ -666,7 +709,7 @@ impl TcpStream {
     fn lock_nonblocking<'a>(&'a self) -> Guard<'a> {
         let ret = Guard {
             fd: self.fd(),
-            guard: self.inner.lock.lock(),
+            guard: self.inner.lock.lock().unwrap(),
         };
         assert!(set_nonblocking(self.fd(), true).is_ok());
         ret
@@ -674,8 +717,8 @@ impl TcpStream {
 
     pub fn read(&mut self, buf: &mut [u8]) -> IoResult<uint> {
         let fd = self.fd();
-        let dolock = || self.lock_nonblocking();
-        let doread = |nb| unsafe {
+        let dolock = |&:| self.lock_nonblocking();
+        let doread = |&mut: nb| unsafe {
             let flags = if nb {c::MSG_DONTWAIT} else {0};
             libc::recv(fd,
                        buf.as_mut_ptr() as *mut libc::c_void,
@@ -687,8 +730,8 @@ impl TcpStream {
 
     pub fn write(&mut self, buf: &[u8]) -> IoResult<()> {
         let fd = self.fd();
-        let dolock = || self.lock_nonblocking();
-        let dowrite = |nb: bool, buf: *const u8, len: uint| unsafe {
+        let dolock = |&:| self.lock_nonblocking();
+        let dowrite = |&: nb: bool, buf: *const u8, len: uint| unsafe {
             let flags = if nb {c::MSG_DONTWAIT} else {0};
             libc::send(fd,
                        buf as *const _,
@@ -805,7 +848,7 @@ impl UdpSocket {
     fn lock_nonblocking<'a>(&'a self) -> Guard<'a> {
         let ret = Guard {
             fd: self.fd(),
-            guard: self.inner.lock.lock(),
+            guard: self.inner.lock.lock().unwrap(),
         };
         assert!(set_nonblocking(self.fd(), true).is_ok());
         ret
@@ -822,7 +865,7 @@ impl UdpSocket {
         let mut addrlen: libc::socklen_t =
                 mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
 
-        let dolock = || self.lock_nonblocking();
+        let dolock = |&:| self.lock_nonblocking();
         let n = try!(read(fd, self.read_deadline, dolock, |nb| unsafe {
             let flags = if nb {c::MSG_DONTWAIT} else {0};
             libc::recvfrom(fd,
@@ -843,8 +886,8 @@ impl UdpSocket {
         let dstp = &storage as *const _ as *const libc::sockaddr;
 
         let fd = self.fd();
-        let dolock = || self.lock_nonblocking();
-        let dowrite = |nb, buf: *const u8, len: uint| unsafe {
+        let dolock = |&: | self.lock_nonblocking();
+        let dowrite = |&mut: nb, buf: *const u8, len: uint| unsafe {
             let flags = if nb {c::MSG_DONTWAIT} else {0};
             libc::sendto(fd,
                          buf as *const libc::c_void,

@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -17,10 +17,11 @@ use trans::cabi_x86;
 use trans::cabi_x86_64;
 use trans::cabi_x86_win64;
 use trans::cabi_arm;
+use trans::cabi_aarch64;
 use trans::cabi_mips;
 use trans::type_::Type;
 
-#[deriving(Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum ArgKind {
     /// Pass the argument directly using the normal converted
     /// LLVM type or by coercing to another specified type
@@ -31,13 +32,11 @@ pub enum ArgKind {
     Ignore,
 }
 
-impl Copy for ArgKind {}
-
 /// Information about how a specific C type
 /// should be passed to or returned from a function
 ///
 /// This is borrowed from clang's ABIInfo.h
-#[deriving(Clone)]
+#[derive(Clone, Copy)]
 pub struct ArgType {
     pub kind: ArgKind,
     /// Original LLVM type
@@ -49,8 +48,6 @@ pub struct ArgType {
     /// LLVM attribute of argument
     pub attr: option::Option<Attribute>
 }
-
-impl Copy for ArgType {}
 
 impl ArgType {
     pub fn direct(ty: Type, cast: option::Option<Type>,
@@ -111,16 +108,24 @@ pub fn compute_abi_info(ccx: &CrateContext,
                         atys: &[Type],
                         rty: Type,
                         ret_def: bool) -> FnType {
-    match ccx.sess().target.target.arch.as_slice() {
+    match &ccx.sess().target.target.arch[] {
         "x86" => cabi_x86::compute_abi_info(ccx, atys, rty, ret_def),
         "x86_64" => if ccx.sess().target.target.options.is_like_windows {
             cabi_x86_win64::compute_abi_info(ccx, atys, rty, ret_def)
         } else {
             cabi_x86_64::compute_abi_info(ccx, atys, rty, ret_def)
         },
-        "arm" => cabi_arm::compute_abi_info(ccx, atys, rty, ret_def),
+        "aarch64" => cabi_aarch64::compute_abi_info(ccx, atys, rty, ret_def),
+        "arm" => {
+            let flavor = if ccx.sess().target.target.target_os == "ios" {
+                cabi_arm::Flavor::Ios
+            } else {
+                cabi_arm::Flavor::General
+            };
+            cabi_arm::compute_abi_info(ccx, atys, rty, ret_def, flavor)
+        },
         "mips" => cabi_mips::compute_abi_info(ccx, atys, rty, ret_def),
-        a => ccx.sess().fatal((format!("unrecognized arch \"{}\" in target specification", a))
-                              .as_slice()),
+        a => ccx.sess().fatal(&format!("unrecognized arch \"{}\" in target specification", a)
+                              []),
     }
 }

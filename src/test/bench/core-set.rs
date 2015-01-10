@@ -10,16 +10,18 @@
 
 // ignore-pretty very bad with line comments
 
+#![feature(unboxed_closures)]
+
 extern crate collections;
 extern crate rand;
 
+use std::collections::BTreeSet;
 use std::collections::BitvSet;
 use std::collections::HashSet;
-use std::collections::TreeSet;
+use std::collections::hash_map::Hasher;
 use std::hash::Hash;
 use std::os;
 use std::time::Duration;
-use std::uint;
 
 struct Results {
     sequential_ints: Duration,
@@ -31,7 +33,7 @@ struct Results {
     delete_strings: Duration,
 }
 
-fn timed(result: &mut Duration, op: ||) {
+fn timed<F>(result: &mut Duration, op: F) where F: FnOnce() {
     *result = Duration::span(op);
 }
 
@@ -41,12 +43,12 @@ trait MutableSet<T> {
     fn contains(&self, k: &T) -> bool;
 }
 
-impl<T: Hash + Eq> MutableSet<T> for HashSet<T> {
+impl<T: Hash<Hasher> + Eq> MutableSet<T> for HashSet<T> {
     fn insert(&mut self, k: T) { self.insert(k); }
     fn remove(&mut self, k: &T) -> bool { self.remove(k) }
     fn contains(&self, k: &T) -> bool { self.contains(k) }
 }
-impl<T: Ord> MutableSet<T> for TreeSet<T> {
+impl<T: Ord> MutableSet<T> for BTreeSet<T> {
     fn insert(&mut self, k: T) { self.insert(k); }
     fn remove(&mut self, k: &T) -> bool { self.remove(k) }
     fn contains(&self, k: &T) -> bool { self.contains(k) }
@@ -59,12 +61,14 @@ impl MutableSet<uint> for BitvSet {
 
 impl Results {
     pub fn bench_int<T:MutableSet<uint>,
-                     R: rand::Rng>(
+                     R:rand::Rng,
+                     F:FnMut() -> T>(
                      &mut self,
                      rng: &mut R,
                      num_keys: uint,
                      rand_cap: uint,
-                     f: || -> T) { {
+                     mut f: F) {
+        {
             let mut set = f();
             timed(&mut self.sequential_ints, || {
                 for i in range(0u, num_keys) {
@@ -101,11 +105,12 @@ impl Results {
     }
 
     pub fn bench_str<T:MutableSet<String>,
-                     R:rand::Rng>(
+                     R:rand::Rng,
+                     F:FnMut() -> T>(
                      &mut self,
                      rng: &mut R,
                      num_keys: uint,
-                     f: || -> T) {
+                     mut f: F) {
         {
             let mut set = f();
             timed(&mut self.sequential_strings, || {
@@ -178,7 +183,7 @@ fn main() {
     let args = args.as_slice();
     let num_keys = {
         if args.len() == 2 {
-            from_str::<uint>(args[1].as_slice()).unwrap()
+            args[1].parse::<uint>().unwrap()
         } else {
             100 // woefully inadequate for any real measurement
         }
@@ -205,14 +210,14 @@ fn main() {
         let mut rng: rand::IsaacRng = rand::SeedableRng::from_seed(seed);
         let mut results = empty_results();
         results.bench_int(&mut rng, num_keys, max, || {
-            let s: TreeSet<uint> = TreeSet::new();
+            let s: BTreeSet<uint> = BTreeSet::new();
             s
         });
         results.bench_str(&mut rng, num_keys, || {
-            let s: TreeSet<String> = TreeSet::new();
+            let s: BTreeSet<String> = BTreeSet::new();
             s
         });
-        write_results("collections::TreeSet", &results);
+        write_results("collections::BTreeSet", &results);
     }
 
     {

@@ -14,18 +14,17 @@ use trans::basic_block::BasicBlock;
 use trans::common::Block;
 use libc::c_uint;
 
+#[derive(Copy)]
 pub struct Value(pub ValueRef);
 
-impl Copy for Value {}
-
-macro_rules! opt_val ( ($e:expr) => (
+macro_rules! opt_val { ($e:expr) => (
     unsafe {
         match $e {
-            p if p.is_not_null() => Some(Value(p)),
+            p if !p.is_null() => Some(Value(p)),
             _ => None
         }
     }
-))
+) }
 
 /// Wrapper for LLVM ValueRef
 impl Value {
@@ -38,7 +37,7 @@ impl Value {
     pub fn get_parent(self) -> Option<BasicBlock> {
         unsafe {
             match llvm::LLVMGetInstructionParent(self.get()) {
-                p if p.is_not_null() => Some(BasicBlock(p)),
+                p if !p.is_null() => Some(BasicBlock(p)),
                 _ => None
             }
         }
@@ -78,7 +77,7 @@ impl Value {
     pub fn get_first_use(self) -> Option<Use> {
         unsafe {
             match llvm::LLVMGetFirstUse(self.get()) {
-                u if u.is_not_null() => Some(Use(u)),
+                u if !u.is_null() => Some(Use(u)),
                 _ => None
             }
         }
@@ -120,19 +119,15 @@ impl Value {
     /// Tests if this value is a terminator instruction
     pub fn is_a_terminator_inst(self) -> bool {
         unsafe {
-            llvm::LLVMIsATerminatorInst(self.get()).is_not_null()
+            !llvm::LLVMIsATerminatorInst(self.get()).is_null()
         }
     }
 }
 
 /// Wrapper for LLVM UseRef
+#[derive(Copy)]
 pub struct Use(UseRef);
 
-impl Copy for Use {}
-
-/**
- * Wrapper for LLVM UseRef
- */
 impl Use {
     pub fn get(&self) -> UseRef {
         let Use(v) = *self; v
@@ -147,7 +142,7 @@ impl Use {
     pub fn get_next_use(self) -> Option<Use> {
         unsafe {
             match llvm::LLVMGetNextUse(self.get()) {
-                u if u.is_not_null() => Some(Use(u)),
+                u if !u.is_null() => Some(Use(u)),
                 _ => None
             }
         }
@@ -160,7 +155,9 @@ pub struct Users {
     next: Option<Use>
 }
 
-impl Iterator<Value> for Users {
+impl Iterator for Users {
+    type Item = Value;
+
     fn next(&mut self) -> Option<Value> {
         let current = self.next;
 

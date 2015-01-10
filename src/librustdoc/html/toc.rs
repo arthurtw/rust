@@ -14,7 +14,7 @@ use std::fmt;
 use std::string::String;
 
 /// A (recursive) table of contents
-#[deriving(PartialEq)]
+#[derive(PartialEq)]
 pub struct Toc {
     /// The levels are strictly decreasing, i.e.
     ///
@@ -24,9 +24,11 @@ pub struct Toc {
     /// both of which end up in the same `Toc` as they have the same
     /// parent (Main).
     ///
+    /// ```text
     /// # Main
     /// ### A
     /// ## B
+    /// ```
     entries: Vec<TocEntry>
 }
 
@@ -36,7 +38,7 @@ impl Toc {
     }
 }
 
-#[deriving(PartialEq)]
+#[derive(PartialEq)]
 pub struct TocEntry {
     level: u32,
     sec_number: String,
@@ -46,7 +48,7 @@ pub struct TocEntry {
 }
 
 /// Progressive construction of a table of contents.
-#[deriving(PartialEq)]
+#[derive(PartialEq)]
 pub struct TocBuilder {
     top_level: Toc,
     /// The current hierarchy of parent headings, the levels are
@@ -78,6 +80,7 @@ impl TocBuilder {
     ///
     /// Example:
     ///
+    /// ```text
     /// ## A
     /// # B
     /// # C
@@ -86,6 +89,7 @@ impl TocBuilder {
     /// ### F
     /// #### G
     /// ### H
+    /// ```
     ///
     /// If we are considering H (i.e. level 3), then A and B are in
     /// self.top_level, D is in C.children, and C, E, F, G are in
@@ -173,6 +177,12 @@ impl TocBuilder {
 }
 
 impl fmt::Show for Toc {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::String::fmt(self, f)
+    }
+}
+
+impl fmt::String for Toc {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         try!(write!(fmt, "<ul>"));
         for entry in self.entries.iter() {

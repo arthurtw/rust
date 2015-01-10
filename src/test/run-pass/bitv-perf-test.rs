@@ -9,12 +9,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
 extern crate collections;
 use std::collections::Bitv;
 
 fn bitv_test() {
-    let mut v1 = box Bitv::with_capacity(31, false);
-    let v2 = box Bitv::with_capacity(31, true);
+    let mut v1 = box Bitv::from_elem(31, false);
+    let v2 = box Bitv::from_elem(31, true);
     v1.union(&*v2);
 }
 

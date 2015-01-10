@@ -85,6 +85,31 @@ pub fn is_shift_binop(b: BinOp) -> bool {
     }
 }
 
+pub fn is_comparison_binop(b: BinOp) -> bool {
+    match b {
+        BiEq | BiLt | BiLe | BiNe | BiGt | BiGe => true,
+        _ => false
+    }
+}
+
+/// Returns `true` if the binary operator takes its arguments by value
+pub fn is_by_value_binop(b: BinOp) -> bool {
+    match b {
+        BiAdd | BiSub | BiMul | BiDiv | BiRem | BiBitXor | BiBitAnd | BiBitOr | BiShl | BiShr => {
+            true
+        }
+        _ => false
+    }
+}
+
+/// Returns `true` if the unary operator takes its argument by value
+pub fn is_by_value_unop(u: UnOp) -> bool {
+    match u {
+        UnNeg | UnNot => true,
+        _ => false,
+    }
+}
+
 pub fn unop_to_string(op: UnOp) -> &'static str {
     match op {
       UnUniq => "box() ",
@@ -102,8 +127,10 @@ pub fn is_path(e: P<Expr>) -> bool {
 /// We want to avoid "45int" and "-3int" in favor of "45" and "-3"
 pub fn int_ty_to_string(t: IntTy, val: Option<i64>) -> String {
     let s = match t {
-        TyI if val.is_some() => "i",
-        TyI => "int",
+        TyIs(true) if val.is_some() => "i",
+        TyIs(true) => "int",
+        TyIs(false) if val.is_some() => "is",
+        TyIs(false) => "isize",
         TyI8 => "i8",
         TyI16 => "i16",
         TyI32 => "i32",
@@ -123,7 +150,7 @@ pub fn int_ty_max(t: IntTy) -> u64 {
     match t {
         TyI8 => 0x80u64,
         TyI16 => 0x8000u64,
-        TyI | TyI32 => 0x80000000u64, // actually ni about TyI
+        TyIs(_) | TyI32 => 0x80000000u64, // actually ni about TyIs
         TyI64 => 0x8000000000000000u64
     }
 }
@@ -132,8 +159,10 @@ pub fn int_ty_max(t: IntTy) -> u64 {
 /// We want to avoid "42uint" in favor of "42u"
 pub fn uint_ty_to_string(t: UintTy, val: Option<u64>) -> String {
     let s = match t {
-        TyU if val.is_some() => "u",
-        TyU => "uint",
+        TyUs(true) if val.is_some() => "u",
+        TyUs(true) => "uint",
+        TyUs(false) if val.is_some() => "us",
+        TyUs(false) => "usize",
         TyU8 => "u8",
         TyU16 => "u16",
         TyU32 => "u32",
@@ -150,7 +179,7 @@ pub fn uint_ty_max(t: UintTy) -> u64 {
     match t {
         TyU8 => 0xffu64,
         TyU16 => 0xffffu64,
-        TyU | TyU32 => 0xffffffffu64, // actually ni about TyU
+        TyUs(_) | TyU32 => 0xffffffffu64, // actually ni about TyUs
         TyU64 => 0xffffffffffffffffu64
     }
 }
@@ -174,10 +203,26 @@ pub fn ident_to_path(s: Span, identifier: Ident) -> Path {
                 parameters: ast::AngleBracketedParameters(ast::AngleBracketedParameterData {
                     lifetimes: Vec::new(),
                     types: OwnedSlice::empty(),
+                    bindings: OwnedSlice::empty(),
                 })
             }
         ),
     }
+}
+
+// If path is a single segment ident path, return that ident. Otherwise, return
+// None.
+pub fn path_to_ident(path: &Path) -> Option<Ident> {
+    if path.segments.len() != 1 {
+        return None;
+    }
+
+    let segment = &path.segments[0];
+    if !segment.parameters.is_empty() {
+        return None;
+    }
+
+    Some(segment.identifier)
 }
 
 pub fn ident_to_pat(id: NodeId, s: Span, i: Ident) -> P<Pat> {
@@ -204,11 +249,11 @@ pub fn impl_pretty_name(trait_ref: &Option<TraitRef>, ty: &Ty) -> Ident {
     match *trait_ref {
         Some(ref trait_ref) => {
             pretty.push('.');
-            pretty.push_str(pprust::path_to_string(&trait_ref.path).as_slice());
+            pretty.push_str(&pprust::path_to_string(&trait_ref.path)[]);
         }
         None => {}
     }
-    token::gensym_ident(pretty.as_slice())
+    token::gensym_ident(&pretty[])
 }
 
 pub fn trait_method_to_ty_method(method: &Method) -> TypeMethod {
@@ -217,14 +262,14 @@ pub fn trait_method_to_ty_method(method: &Method) -> TypeMethod {
                  ref generics,
                  abi,
                  ref explicit_self,
-                 fn_style,
+                 unsafety,
                  ref decl,
                  _,
                  vis) => {
             TypeMethod {
                 ident: ident,
                 attrs: method.attrs.clone(),
-                fn_style: fn_style,
+                unsafety: unsafety,
                 decl: (*decl).clone(),
                 generics: generics.clone(),
                 explicit_self: (*explicit_self).clone(),
@@ -283,8 +328,7 @@ pub fn operator_prec(op: ast::BinOp) -> uint {
       BiBitAnd                  =>  8u,
       BiBitXor                  =>  7u,
       BiBitOr                   =>  6u,
-      BiLt | BiLe | BiGe | BiGt =>  4u,
-      BiEq | BiNe               =>  3u,
+      BiLt | BiLe | BiGe | BiGt | BiEq | BiNe => 3u,
       BiAnd                     =>  2u,
       BiOr                      =>  1u
   }
@@ -309,13 +353,11 @@ pub fn empty_generics() -> Generics {
 // ______________________________________________________________________
 // Enumerating the IDs which appear in an AST
 
-#[deriving(Encodable, Decodable, Show)]
+#[derive(RustcEncodable, RustcDecodable, Show, Copy)]
 pub struct IdRange {
     pub min: NodeId,
     pub max: NodeId,
 }
-
-impl Copy for IdRange {}
 
 impl IdRange {
     pub fn max() -> IdRange {
@@ -586,51 +628,56 @@ pub fn compute_id_range_for_fn_body(fk: visit::FnKind,
     id_visitor.operation.result
 }
 
-pub fn walk_pat(pat: &Pat, it: |&Pat| -> bool) -> bool {
-    if !it(pat) {
-        return false;
+pub fn walk_pat<F>(pat: &Pat, mut it: F) -> bool where F: FnMut(&Pat) -> bool {
+    // FIXME(#19596) this is a workaround, but there should be a better way
+    fn walk_pat_<G>(pat: &Pat, it: &mut G) -> bool where G: FnMut(&Pat) -> bool {
+        if !(*it)(pat) {
+            return false;
+        }
+
+        match pat.node {
+            PatIdent(_, _, Some(ref p)) => walk_pat_(&**p, it),
+            PatStruct(_, ref fields, _) => {
+                fields.iter().all(|field| walk_pat_(&*field.node.pat, it))
+            }
+            PatEnum(_, Some(ref s)) | PatTup(ref s) => {
+                s.iter().all(|p| walk_pat_(&**p, it))
+            }
+            PatBox(ref s) | PatRegion(ref s, _) => {
+                walk_pat_(&**s, it)
+            }
+            PatVec(ref before, ref slice, ref after) => {
+                before.iter().all(|p| walk_pat_(&**p, it)) &&
+                slice.iter().all(|p| walk_pat_(&**p, it)) &&
+                after.iter().all(|p| walk_pat_(&**p, it))
+            }
+            PatMac(_) => panic!("attempted to analyze unexpanded pattern"),
+            PatWild(_) | PatLit(_) | PatRange(_, _) | PatIdent(_, _, _) |
+            PatEnum(_, _) => {
+                true
+            }
+        }
     }
 
-    match pat.node {
-        PatIdent(_, _, Some(ref p)) => walk_pat(&**p, it),
-        PatStruct(_, ref fields, _) => {
-            fields.iter().all(|field| walk_pat(&*field.node.pat, |p| it(p)))
-        }
-        PatEnum(_, Some(ref s)) | PatTup(ref s) => {
-            s.iter().all(|p| walk_pat(&**p, |p| it(p)))
-        }
-        PatBox(ref s) | PatRegion(ref s) => {
-            walk_pat(&**s, it)
-        }
-        PatVec(ref before, ref slice, ref after) => {
-            before.iter().all(|p| walk_pat(&**p, |p| it(p))) &&
-            slice.iter().all(|p| walk_pat(&**p, |p| it(p))) &&
-            after.iter().all(|p| walk_pat(&**p, |p| it(p)))
-        }
-        PatMac(_) => panic!("attempted to analyze unexpanded pattern"),
-        PatWild(_) | PatLit(_) | PatRange(_, _) | PatIdent(_, _, _) |
-        PatEnum(_, _) => {
-            true
-        }
-    }
+    walk_pat_(pat, &mut it)
 }
 
 pub trait EachViewItem {
-    fn each_view_item(&self, f: |&ast::ViewItem| -> bool) -> bool;
+    fn each_view_item<F>(&self, f: F) -> bool where F: FnMut(&ast::ViewItem) -> bool;
 }
 
-struct EachViewItemData<'a> {
-    callback: |&ast::ViewItem|: 'a -> bool,
+struct EachViewItemData<F> where F: FnMut(&ast::ViewItem) -> bool {
+    callback: F,
 }
 
-impl<'a, 'v> Visitor<'v> for EachViewItemData<'a> {
+impl<'v, F> Visitor<'v> for EachViewItemData<F> where F: FnMut(&ast::ViewItem) -> bool {
     fn visit_view_item(&mut self, view_item: &ast::ViewItem) {
         let _ = (self.callback)(view_item);
     }
 }
 
 impl EachViewItem for ast::Crate {
-    fn each_view_item(&self, f: |&ast::ViewItem| -> bool) -> bool {
+    fn each_view_item<F>(&self, f: F) -> bool where F: FnMut(&ast::ViewItem) -> bool {
         let mut visit = EachViewItemData {
             callback: f,
         };
@@ -667,7 +714,7 @@ pub fn pat_is_ident(pat: P<ast::Pat>) -> bool {
 pub fn path_name_eq(a : &ast::Path, b : &ast::Path) -> bool {
     (a.span == b.span)
     && (a.global == b.global)
-    && (segments_name_eq(a.segments.as_slice(), b.segments.as_slice()))
+    && (segments_name_eq(&a.segments[], &b.segments[]))
 }
 
 // are two arrays of segments equal when compared unhygienically?
@@ -705,7 +752,7 @@ pub trait PostExpansionMethod {
     fn pe_generics<'a>(&'a self) -> &'a ast::Generics;
     fn pe_abi(&self) -> Abi;
     fn pe_explicit_self<'a>(&'a self) -> &'a ast::ExplicitSelf;
-    fn pe_fn_style(&self) -> ast::FnStyle;
+    fn pe_unsafety(&self) -> ast::Unsafety;
     fn pe_fn_decl<'a>(&'a self) -> &'a ast::FnDecl;
     fn pe_body<'a>(&'a self) -> &'a ast::Block;
     fn pe_vis(&self) -> ast::Visibility;
@@ -726,16 +773,20 @@ macro_rules! mf_method{
 
 
 impl PostExpansionMethod for Method {
-    mf_method!(pe_ident,ast::Ident,MethDecl(ident,_,_,_,_,_,_,_),ident)
-    mf_method!(pe_generics,&'a ast::Generics,
-               MethDecl(_,ref generics,_,_,_,_,_,_),generics)
-    mf_method!(pe_abi,Abi,MethDecl(_,_,abi,_,_,_,_,_),abi)
-    mf_method!(pe_explicit_self,&'a ast::ExplicitSelf,
-               MethDecl(_,_,_,ref explicit_self,_,_,_,_),explicit_self)
-    mf_method!(pe_fn_style,ast::FnStyle,MethDecl(_,_,_,_,fn_style,_,_,_),fn_style)
-    mf_method!(pe_fn_decl,&'a ast::FnDecl,MethDecl(_,_,_,_,_,ref decl,_,_),&**decl)
-    mf_method!(pe_body,&'a ast::Block,MethDecl(_,_,_,_,_,_,ref body,_),&**body)
-    mf_method!(pe_vis,ast::Visibility,MethDecl(_,_,_,_,_,_,_,vis),vis)
+    mf_method! { pe_ident,ast::Ident,MethDecl(ident,_,_,_,_,_,_,_),ident }
+    mf_method! {
+        pe_generics,&'a ast::Generics,
+        MethDecl(_,ref generics,_,_,_,_,_,_),generics
+    }
+    mf_method! { pe_abi,Abi,MethDecl(_,_,abi,_,_,_,_,_),abi }
+    mf_method! {
+        pe_explicit_self,&'a ast::ExplicitSelf,
+        MethDecl(_,_,_,ref explicit_self,_,_,_,_),explicit_self
+    }
+    mf_method! { pe_unsafety,ast::Unsafety,MethDecl(_,_,_,_,unsafety,_,_,_),unsafety }
+    mf_method! { pe_fn_decl,&'a ast::FnDecl,MethDecl(_,_,_,_,_,ref decl,_,_),&**decl }
+    mf_method! { pe_body,&'a ast::Block,MethDecl(_,_,_,_,_,_,ref body,_),&**body }
+    mf_method! { pe_vis,ast::Visibility,MethDecl(_,_,_,_,_,_,_,vis),vis }
 }
 
 #[cfg(test)]
@@ -750,14 +801,14 @@ mod test {
 
     #[test] fn idents_name_eq_test() {
         assert!(segments_name_eq(
-            [Ident{name:Name(3),ctxt:4}, Ident{name:Name(78),ctxt:82}]
-                .iter().map(ident_to_segment).collect::<Vec<PathSegment>>().as_slice(),
-            [Ident{name:Name(3),ctxt:104}, Ident{name:Name(78),ctxt:182}]
-                .iter().map(ident_to_segment).collect::<Vec<PathSegment>>().as_slice()));
+            &[Ident{name:Name(3),ctxt:4}, Ident{name:Name(78),ctxt:82}]
+                .iter().map(ident_to_segment).collect::<Vec<PathSegment>>()[],
+            &[Ident{name:Name(3),ctxt:104}, Ident{name:Name(78),ctxt:182}]
+                .iter().map(ident_to_segment).collect::<Vec<PathSegment>>()[]));
         assert!(!segments_name_eq(
-            [Ident{name:Name(3),ctxt:4}, Ident{name:Name(78),ctxt:82}]
-                .iter().map(ident_to_segment).collect::<Vec<PathSegment>>().as_slice(),
-            [Ident{name:Name(3),ctxt:104}, Ident{name:Name(77),ctxt:182}]
-                .iter().map(ident_to_segment).collect::<Vec<PathSegment>>().as_slice()));
+            &[Ident{name:Name(3),ctxt:4}, Ident{name:Name(78),ctxt:82}]
+                .iter().map(ident_to_segment).collect::<Vec<PathSegment>>()[],
+            &[Ident{name:Name(3),ctxt:104}, Ident{name:Name(77),ctxt:182}]
+                .iter().map(ident_to_segment).collect::<Vec<PathSegment>>()[]));
     }
 }

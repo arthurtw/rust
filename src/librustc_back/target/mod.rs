@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014-2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -53,21 +53,27 @@ use std::io::fs::PathExtensions;
 mod windows_base;
 mod linux_base;
 mod apple_base;
+mod apple_ios_base;
 mod freebsd_base;
 mod dragonfly_base;
 
-mod arm_apple_ios;
+mod armv7_apple_ios;
+mod armv7s_apple_ios;
+mod i386_apple_ios;
+
 mod arm_linux_androideabi;
 mod arm_unknown_linux_gnueabi;
 mod arm_unknown_linux_gnueabihf;
+mod aarch64_apple_ios;
+mod aarch64_unknown_linux_gnu;
 mod i686_apple_darwin;
-mod i386_apple_ios;
 mod i686_pc_windows_gnu;
 mod i686_unknown_dragonfly;
 mod i686_unknown_linux_gnu;
 mod mips_unknown_linux_gnu;
 mod mipsel_unknown_linux_gnu;
 mod x86_64_apple_darwin;
+mod x86_64_apple_ios;
 mod x86_64_pc_windows_gnu;
 mod x86_64_unknown_freebsd;
 mod x86_64_unknown_dragonfly;
@@ -76,7 +82,7 @@ mod x86_64_unknown_linux_gnu;
 /// Everything `rustc` knows about how to compile for a specific target.
 ///
 /// Every field here must be specified, and has no default value.
-#[deriving(Clone, Show)]
+#[derive(Clone, Show)]
 pub struct Target {
     /// [Data layout](http://llvm.org/docs/LangRef.html#data-layout) to pass to LLVM.
     pub data_layout: String,
@@ -84,12 +90,12 @@ pub struct Target {
     pub llvm_target: String,
     /// String to use as the `target_endian` `cfg` variable.
     pub target_endian: String,
-    /// String to use as the `target_word_size` `cfg` variable.
-    pub target_word_size: String,
+    /// String to use as the `target_pointer_width` `cfg` variable.
+    pub target_pointer_width: String,
     /// OS name to use for conditional compilation.
     pub target_os: String,
-    /// Architecture to use for ABI considerations. Valid options: "x86", "x86_64", "arm", and
-    /// "mips". "mips" includes "mipsel".
+    /// Architecture to use for ABI considerations. Valid options: "x86", "x86_64", "arm",
+    /// "aarch64", and "mips". "mips" includes "mipsel".
     pub arch: String,
     /// Optional settings with defaults.
     pub options: TargetOptions,
@@ -99,7 +105,7 @@ pub struct Target {
 ///
 /// This has an implementation of `Default`, see each field for what the default is. In general,
 /// these try to take "minimal defaults" that don't assume anything about the runtime they run in.
-#[deriving(Clone, Show)]
+#[derive(Clone, Show)]
 pub struct TargetOptions {
     /// Linker to invoke. Defaults to "cc".
     pub linker: String,
@@ -217,14 +223,13 @@ impl Target {
 
         let handler = diagnostic::default_handler(diagnostic::Auto, None);
 
-        let get_req_field = |name: &str| {
+        let get_req_field = |&: name: &str| {
             match obj.find(name)
                      .map(|s| s.as_string())
                      .and_then(|os| os.map(|s| s.to_string())) {
                 Some(val) => val,
                 None =>
-                    handler.fatal((format!("Field {} in target specification is required", name))
-                                  .as_slice())
+                    handler.fatal(&format!("Field {} in target specification is required", name)[])
             }
         };
 
@@ -232,31 +237,33 @@ impl Target {
             data_layout: get_req_field("data-layout"),
             llvm_target: get_req_field("llvm-target"),
             target_endian: get_req_field("target-endian"),
-            target_word_size: get_req_field("target-word-size"),
+            target_pointer_width: get_req_field("target-word-size"),
             arch: get_req_field("arch"),
             target_os: get_req_field("os"),
             options: Default::default(),
         };
 
-        macro_rules! key (
+        macro_rules! key {
             ($key_name:ident) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(name[]).map(|o| o.as_string()
+                obj.find(&name[]).map(|o| o.as_string()
                                     .map(|s| base.options.$key_name = s.to_string()));
             } );
             ($key_name:ident, bool) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(name[]).map(|o| o.as_boolean().map(|s| base.options.$key_name = s));
+                obj.find(&name[])
+                    .map(|o| o.as_boolean()
+                         .map(|s| base.options.$key_name = s));
             } );
             ($key_name:ident, list) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(name[]).map(|o| o.as_array()
+                obj.find(&name[]).map(|o| o.as_array()
                     .map(|v| base.options.$key_name = v.iter()
                         .map(|a| a.as_string().unwrap().to_string()).collect()
                         )
                     );
             } );
-        )
+        }
 
         key!(cpu);
         key!(linker);
@@ -298,13 +305,13 @@ impl Target {
         use serialize::json;
 
         fn load_file(path: &Path) -> Result<Target, String> {
-            let mut f = try!(File::open(path).map_err(|e| e.to_string()));
-            let obj = try!(json::from_reader(&mut f).map_err(|e| e.to_string()));
+            let mut f = try!(File::open(path).map_err(|e| format!("{:?}", e)));
+            let obj = try!(json::from_reader(&mut f).map_err(|e| format!("{:?}", e)));
             Ok(Target::from_json(obj))
         }
 
         // this would use a match if stringify! were allowed in pattern position
-        macro_rules! load_specific (
+        macro_rules! load_specific {
             ( $($name:ident),+ ) => (
                 {
                     let target = target.replace("-", "_");
@@ -312,7 +319,7 @@ impl Target {
                     $(
                         else if target == stringify!($name) {
                             let t = $name::target();
-                            debug!("Got builtin target: {}", t);
+                            debug!("Got builtin target: {:?}", t);
                             return Ok(t);
                         }
                     )*
@@ -325,7 +332,7 @@ impl Target {
                     }
                 }
             )
-        )
+        }
 
         load_specific!(
             x86_64_unknown_linux_gnu,
@@ -335,6 +342,7 @@ impl Target {
             arm_linux_androideabi,
             arm_unknown_linux_gnueabi,
             arm_unknown_linux_gnueabihf,
+            aarch64_unknown_linux_gnu,
 
             x86_64_unknown_freebsd,
 
@@ -343,12 +351,16 @@ impl Target {
 
             x86_64_apple_darwin,
             i686_apple_darwin,
+
             i386_apple_ios,
-            arm_apple_ios,
+            x86_64_apple_ios,
+            aarch64_apple_ios,
+            armv7_apple_ios,
+            armv7s_apple_ios,
 
             x86_64_pc_windows_gnu,
             i686_pc_windows_gnu
-        )
+        );
 
 
         let path = Path::new(target);
@@ -365,7 +377,7 @@ impl Target {
 
         let target_path = os::getenv("RUST_TARGET_PATH").unwrap_or(String::new());
 
-        let paths = os::split_paths(target_path.as_slice());
+        let paths = os::split_paths(&target_path[]);
         // FIXME 16351: add a sane default search path?
 
         for dir in paths.iter() {
@@ -375,6 +387,6 @@ impl Target {
             }
         }
 
-        Err(format!("Could not find specification for target {}", target))
+        Err(format!("Could not find specification for target {:?}", target))
     }
 }

@@ -18,11 +18,11 @@ trait Dummy { }
 // careful with object types, who knows what they close over...
 fn test51<'a>() {
     assert_send::<&'a Dummy>();
-    //~^ ERROR the trait `core::kinds::Send` is not implemented
+    //~^ ERROR the trait `core::marker::Send` is not implemented
 }
 fn test52<'a>() {
     assert_send::<&'a (Dummy+Send)>();
-    //~^ ERROR does not fulfill the required lifetime
+    //~^ ERROR declared lifetime bound not satisfied
 }
 
 // ...unless they are properly bounded
@@ -35,14 +35,9 @@ fn test61() {
 
 // closure and object types can have lifetime bounds which make
 // them not ok
-fn test_70<'a>() {
-    assert_send::<proc():'a>();
-    //~^ ERROR the trait `core::kinds::Send` is not implemented
-}
-
 fn test_71<'a>() {
     assert_send::<Box<Dummy+'a>>();
-    //~^ ERROR the trait `core::kinds::Send` is not implemented
+    //~^ ERROR the trait `core::marker::Send` is not implemented
 }
 
 fn main() { }

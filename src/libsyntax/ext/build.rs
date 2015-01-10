@@ -37,7 +37,8 @@ pub trait AstBuilder {
                 global: bool,
                 idents: Vec<ast::Ident> ,
                 lifetimes: Vec<ast::Lifetime>,
-                types: Vec<P<ast::Ty>> )
+                types: Vec<P<ast::Ty>>,
+                bindings: Vec<P<ast::TypeBinding>> )
         -> ast::Path;
 
     // types
@@ -67,7 +68,6 @@ pub trait AstBuilder {
                span: Span,
                id: ast::Ident,
                bounds: OwnedSlice<ast::TyParamBound>,
-               unbound: Option<ast::TraitRef>,
                default: Option<P<ast::Ty>>) -> ast::TyParam;
 
     fn trait_ref(&self, path: ast::Path) -> ast::TraitRef;
@@ -293,20 +293,21 @@ pub trait AstBuilder {
 
 impl<'a> AstBuilder for ExtCtxt<'a> {
     fn path(&self, span: Span, strs: Vec<ast::Ident> ) -> ast::Path {
-        self.path_all(span, false, strs, Vec::new(), Vec::new())
+        self.path_all(span, false, strs, Vec::new(), Vec::new(), Vec::new())
     }
     fn path_ident(&self, span: Span, id: ast::Ident) -> ast::Path {
         self.path(span, vec!(id))
     }
     fn path_global(&self, span: Span, strs: Vec<ast::Ident> ) -> ast::Path {
-        self.path_all(span, true, strs, Vec::new(), Vec::new())
+        self.path_all(span, true, strs, Vec::new(), Vec::new(), Vec::new())
     }
     fn path_all(&self,
                 sp: Span,
                 global: bool,
                 mut idents: Vec<ast::Ident> ,
                 lifetimes: Vec<ast::Lifetime>,
-                types: Vec<P<ast::Ty>> )
+                types: Vec<P<ast::Ty>>,
+                bindings: Vec<P<ast::TypeBinding>> )
                 -> ast::Path {
         let last_identifier = idents.pop().unwrap();
         let mut segments: Vec<ast::PathSegment> = idents.into_iter()
@@ -321,6 +322,7 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
             parameters: ast::AngleBracketedParameters(ast::AngleBracketedParameterData {
                 lifetimes: lifetimes,
                 types: OwnedSlice::from_vec(types),
+                bindings: OwnedSlice::from_vec(bindings),
             })
         });
         ast::Path {
@@ -391,7 +393,8 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
                               self.ident_of("Option")
                           ),
                           Vec::new(),
-                          vec!( ty )))
+                          vec!( ty ),
+                          Vec::new()))
     }
 
     fn ty_field_imm(&self, span: Span, name: Ident, ty: P<ast::Ty>) -> ast::TypeField {
@@ -410,13 +413,11 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
                span: Span,
                id: ast::Ident,
                bounds: OwnedSlice<ast::TyParamBound>,
-               unbound: Option<ast::TraitRef>,
                default: Option<P<ast::Ty>>) -> ast::TyParam {
         ast::TyParam {
             ident: id,
             id: ast::DUMMY_NODE_ID,
             bounds: bounds,
-            unbound: unbound,
             default: default,
             span: span
         }
@@ -451,7 +452,7 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
     }
 
     fn typarambound(&self, path: ast::Path) -> ast::TyParamBound {
-        ast::TraitTyParamBound(self.poly_trait_ref(path))
+        ast::TraitTyParamBound(self.poly_trait_ref(path), ast::TraitBoundModifier::None)
     }
 
     fn lifetime(&self, span: Span, name: ast::Name) -> ast::Lifetime {
@@ -481,8 +482,8 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
             self.pat_ident(sp, ident)
         };
         let local = P(ast::Local {
-            ty: self.ty_infer(sp),
             pat: pat,
+            ty: None,
             init: Some(ex),
             id: ast::DUMMY_NODE_ID,
             span: sp,
@@ -505,8 +506,8 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
             self.pat_ident(sp, ident)
         };
         let local = P(ast::Local {
-            ty: typ,
             pat: pat,
+            ty: Some(typ),
             init: Some(ex),
             id: ast::DUMMY_NODE_ID,
             span: sp,
@@ -641,10 +642,11 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
         self.expr(sp, ast::ExprLit(P(respan(sp, lit))))
     }
     fn expr_uint(&self, span: Span, i: uint) -> P<ast::Expr> {
-        self.expr_lit(span, ast::LitInt(i as u64, ast::UnsignedIntLit(ast::TyU)))
+        self.expr_lit(span, ast::LitInt(i as u64, ast::UnsignedIntLit(ast::TyUs(false))))
     }
     fn expr_int(&self, sp: Span, i: int) -> P<ast::Expr> {
-        self.expr_lit(sp, ast::LitInt(i as u64, ast::SignedIntLit(ast::TyI, ast::Sign::new(i))))
+        self.expr_lit(sp, ast::LitInt(i as u64, ast::SignedIntLit(ast::TyIs(false),
+                                                                  ast::Sign::new(i))))
     }
     fn expr_u8(&self, sp: Span, u: u8) -> P<ast::Expr> {
         self.expr_lit(sp, ast::LitInt(u as u64, ast::UnsignedIntLit(ast::TyU8)))
@@ -707,9 +709,7 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
     fn expr_fail(&self, span: Span, msg: InternedString) -> P<ast::Expr> {
         let loc = self.codemap().lookup_char_pos(span.lo);
         let expr_file = self.expr_str(span,
-                                      token::intern_and_get_ident(loc.file
-                                                                  .name
-                                                                  .as_slice()));
+                                      token::intern_and_get_ident(&loc.file.name[]));
         let expr_line = self.expr_uint(span, loc.line);
         let expr_file_line_tuple = self.expr_tuple(span, vec!(expr_file, expr_line));
         let expr_file_line_ptr = self.expr_addr_of(span, expr_file_line_tuple);
@@ -864,7 +864,7 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
     }
 
     fn expr_match(&self, span: Span, arg: P<ast::Expr>, arms: Vec<ast::Arm>) -> P<Expr> {
-        self.expr(span, ast::ExprMatch(arg, arms, ast::MatchNormal))
+        self.expr(span, ast::ExprMatch(arg, arms, ast::MatchSource::Normal))
     }
 
     fn expr_if(&self, span: Span, cond: P<ast::Expr>,
@@ -965,7 +965,7 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
                   name,
                   Vec::new(),
                   ast::ItemFn(self.fn_decl(inputs, output),
-                              ast::NormalFn,
+                              ast::Unsafety::Normal,
                               abi::Rust,
                               generics,
                               body))

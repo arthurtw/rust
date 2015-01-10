@@ -20,14 +20,19 @@
 //! more complex, slower arena which can hold objects of any type.
 
 #![crate_name = "arena"]
-#![experimental]
+#![unstable]
+#![staged_api]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
        html_root_url = "http://doc.rust-lang.org/nightly/")]
 
+#![allow(unknown_features)]
 #![feature(unsafe_destructor)]
+#![feature(unboxed_closures)]
+#![feature(box_syntax)]
+#![allow(unknown_features)] #![feature(int_uint)]
 #![allow(missing_docs)]
 
 extern crate alloc;
@@ -45,7 +50,7 @@ use std::rt::heap::{allocate, deallocate};
 // The way arena uses arrays is really deeply awful. The arrays are
 // allocated, and have capacities reserved, but the fill for the array
 // will always stay at 0.
-#[deriving(Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 struct Chunk {
     data: Rc<RefCell<Vec<u8>>>,
     fill: Cell<uint>,
@@ -209,7 +214,7 @@ impl Arena {
     }
 
     #[inline]
-    fn alloc_copy<T>(&self, op: || -> T) -> &mut T {
+    fn alloc_copy<T, F>(&self, op: F) -> &mut T where F: FnOnce() -> T {
         unsafe {
             let ptr = self.alloc_copy_inner(mem::size_of::<T>(),
                                             mem::min_align_of::<T>());
@@ -263,7 +268,7 @@ impl Arena {
     }
 
     #[inline]
-    fn alloc_noncopy<T>(&self, op: || -> T) -> &mut T {
+    fn alloc_noncopy<T, F>(&self, op: F) -> &mut T where F: FnOnce() -> T {
         unsafe {
             let tydesc = get_tydesc::<T>();
             let (ty_ptr, ptr) =
@@ -287,7 +292,7 @@ impl Arena {
     /// Allocates a new item in the arena, using `op` to initialize the value,
     /// and returns a reference to it.
     #[inline]
-    pub fn alloc<T>(&self, op: || -> T) -> &mut T {
+    pub fn alloc<T, F>(&self, op: F) -> &mut T where F: FnOnce() -> T {
         unsafe {
             if intrinsics::needs_drop::<T>() {
                 self.alloc_noncopy(op)
@@ -339,7 +344,7 @@ fn test_arena_destructors_fail() {
         arena.alloc(|| { [0u8, 1u8, 2u8] });
     }
     // Now, panic while allocating
-    arena.alloc::<Rc<int>>(|| {
+    arena.alloc::<Rc<int>, _>(|| {
         panic!();
     });
 }
@@ -411,7 +416,7 @@ impl<T> TypedArenaChunk<T> {
         let size = calculate_size::<T>(self.capacity);
         deallocate(self as *mut TypedArenaChunk<T> as *mut u8, size,
                    mem::min_align_of::<TypedArenaChunk<T>>());
-        if next.is_not_null() {
+        if !next.is_null() {
             let capacity = (*next).capacity;
             (*next).destroy(capacity);
         }

@@ -11,11 +11,13 @@
 // Regression test for issue #10682
 // Nested `proc` usage can't use outer owned data
 
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
 fn work(_: Box<int>) {}
-fn foo(_: proc()) {}
+fn foo<F:FnOnce()>(_: F) {}
 
 pub fn main() {
   let a = box 1;
-  foo(proc() { foo(proc() { work(a) }) })
+  foo(move|| { foo(move|| { work(a) }) })
 }

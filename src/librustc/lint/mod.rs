@@ -28,8 +28,6 @@
 //! example) requires more effort. See `emit_lint` and `GatherNodeLevels`
 //! in `context.rs`.
 
-#![macro_escape]
-
 pub use self::Level::*;
 pub use self::LintSource::*;
 
@@ -42,6 +40,7 @@ use syntax::ast;
 pub use lint::context::{Context, LintStore, raw_emit_lint, check_crate, gather_attrs};
 
 /// Specification of a single lint.
+#[derive(Copy, Show)]
 pub struct Lint {
     /// A string identifier for the lint.
     ///
@@ -64,18 +63,16 @@ pub struct Lint {
     pub desc: &'static str,
 }
 
-impl Copy for Lint {}
-
 impl Lint {
     /// Get the lint's name, with ASCII letters converted to lowercase.
     pub fn name_lower(&self) -> String {
-        self.name.to_ascii_lower()
+        self.name.to_ascii_lowercase()
     }
 }
 
 /// Build a `Lint` initializer.
 #[macro_export]
-macro_rules! lint_initializer (
+macro_rules! lint_initializer {
     ($name:ident, $level:ident, $desc:expr) => (
         ::rustc::lint::Lint {
             name: stringify!($name),
@@ -83,11 +80,11 @@ macro_rules! lint_initializer (
             desc: $desc,
         }
     )
-)
+}
 
 /// Declare a static item of type `&'static Lint`.
 #[macro_export]
-macro_rules! declare_lint (
+macro_rules! declare_lint {
     // FIXME(#14660): deduplicate
     (pub $name:ident, $level:ident, $desc:expr) => (
         pub static $name: &'static ::rustc::lint::Lint
@@ -97,17 +94,17 @@ macro_rules! declare_lint (
         static $name: &'static ::rustc::lint::Lint
             = &lint_initializer!($name, $level, $desc);
     );
-)
+}
 
 /// Declare a static `LintArray` and return it as an expression.
 #[macro_export]
-macro_rules! lint_array ( ($( $lint:expr ),*) => (
+macro_rules! lint_array { ($( $lint:expr ),*) => (
     {
         #[allow(non_upper_case_globals)]
         static array: LintArray = &[ $( &$lint ),* ];
         array
     }
-))
+) }
 
 pub type LintArray = &'static [&'static &'static Lint];
 
@@ -175,13 +172,11 @@ pub trait LintPass {
 pub type LintPassObject = Box<LintPass + 'static>;
 
 /// Identifies a lint known to the compiler.
-#[deriving(Clone)]
+#[derive(Clone, Copy)]
 pub struct LintId {
     // Identity is based on pointer equality of this field.
     lint: &'static Lint,
 }
-
-impl Copy for LintId {}
 
 impl PartialEq for LintId {
     fn eq(&self, other: &LintId) -> bool {
@@ -191,7 +186,7 @@ impl PartialEq for LintId {
 
 impl Eq for LintId { }
 
-impl<S: hash::Writer> hash::Hash<S> for LintId {
+impl<S: hash::Writer + hash::Hasher> hash::Hash<S> for LintId {
     fn hash(&self, state: &mut S) {
         let ptr = self.lint as *const Lint;
         ptr.hash(state);
@@ -213,12 +208,10 @@ impl LintId {
 }
 
 /// Setting for how to handle a lint.
-#[deriving(Clone, PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Show)]
 pub enum Level {
     Allow, Warn, Deny, Forbid
 }
-
-impl Copy for Level {}
 
 impl Level {
     /// Convert a level to a lower-case string.
@@ -244,7 +237,7 @@ impl Level {
 }
 
 /// How a lint level was set.
-#[deriving(Clone, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LintSource {
     /// Lint is at the default level as declared
     /// in rustc or a plugin.
@@ -255,9 +248,10 @@ pub enum LintSource {
 
     /// Lint level was set by a command-line flag.
     CommandLine,
-}
 
-impl Copy for LintSource {}
+    /// Lint level was set by the release channel.
+    ReleaseChannel
+}
 
 pub type LevelSource = (Level, LintSource);
 

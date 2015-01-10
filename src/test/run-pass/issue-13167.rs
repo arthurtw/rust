@@ -11,10 +11,12 @@
 use std::slice;
 
 pub struct PhfMapEntries<'a, T: 'a> {
-    iter: slice::Items<'a, (&'static str, T)>,
+    iter: slice::Iter<'a, (&'static str, T)>,
 }
 
-impl<'a, T> Iterator<(&'static str, &'a T)> for PhfMapEntries<'a, T> {
+impl<'a, T> Iterator for PhfMapEntries<'a, T> {
+    type Item = (&'static str, &'a T);
+
     fn next(&mut self) -> Option<(&'static str, &'a T)> {
         self.iter.by_ref().map(|&(key, ref value)| (key, value)).next()
     }

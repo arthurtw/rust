@@ -10,34 +10,15 @@
 
 // Test sized-ness checking in substitution in impls.
 
-trait T for Sized? {}
+trait T {}
 
 // I would like these to fail eventually.
 // impl - bounded
 trait T1<Z: T> {
 }
-struct S3<Sized? Y>;
-impl<Sized? X: T> T1<X> for S3<X> {
-    //~^ ERROR `core::kinds::Sized` is not implemented for the type `X`
+struct S3<Y: ?Sized>;
+impl<X: ?Sized + T> T1<X> for S3<X> {
+    //~^ ERROR `core::marker::Sized` is not implemented for the type `X`
 }
-
-// impl - unbounded
-trait T2<Z> {
-}
-struct S4<Sized? Y>;
-impl<Sized? X> T2<X> for S4<X> {
-    //~^ ERROR `core::kinds::Sized` is not implemented for the type `X`
-}
-
-// impl - struct
-trait T3<Sized? Z> {
-}
-struct S5<Y>;
-impl<Sized? X> T3<X> for S5<X> { //~ ERROR not implemented
-}
-
-impl<Sized? X> S5<X> { //~ ERROR not implemented
-}
-
 
 fn main() { }

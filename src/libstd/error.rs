@@ -78,12 +78,15 @@
 //! }
 //! ```
 
-use option::Option;
-use option::Option::None;
-use kinds::Send;
-use string::String;
+#![stable]
+
+use prelude::v1::*;
+
+use str::Utf8Error;
+use string::{FromUtf8Error, FromUtf16Error};
 
 /// Base functionality for all errors in Rust.
+#[unstable = "the exact API of this trait may change"]
 pub trait Error: Send {
     /// A short description of the error; usually a static string.
     fn description(&self) -> &str;
@@ -96,14 +99,39 @@ pub trait Error: Send {
 }
 
 /// A trait for types that can be converted from a given error type `E`.
+#[stable]
 pub trait FromError<E> {
     /// Perform the conversion.
     fn from_error(err: E) -> Self;
 }
 
 // Any type is convertable from itself
+#[stable]
 impl<E> FromError<E> for E {
     fn from_error(err: E) -> E {
         err
     }
+}
+
+#[stable]
+impl Error for Utf8Error {
+    fn description(&self) -> &str {
+        match *self {
+            Utf8Error::TooShort => "invalid utf-8: not enough bytes",
+            Utf8Error::InvalidByte(..) => "invalid utf-8: corrupt contents",
+        }
+    }
+
+    fn detail(&self) -> Option<String> { Some(self.to_string()) }
+}
+
+#[stable]
+impl Error for FromUtf8Error {
+    fn description(&self) -> &str { "invalid utf-8" }
+    fn detail(&self) -> Option<String> { Some(self.to_string()) }
+}
+
+#[stable]
+impl Error for FromUtf16Error {
+    fn description(&self) -> &str { "invalid utf-16" }
 }

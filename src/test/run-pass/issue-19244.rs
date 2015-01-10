@@ -8,15 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(tuple_indexing)]
-
 struct MyStruct { field: uint }
 const STRUCT: MyStruct = MyStruct { field: 42 };
 const TUP: (uint,) = (43,);
 
 fn main() {
-    let a = [0i, ..STRUCT.field];
-    let b = [0i, ..TUP.0];
+    let a = [0i; STRUCT.field];
+    let b = [0i; TUP.0];
 
     assert!(a.len() == 42);
     assert!(b.len() == 43);

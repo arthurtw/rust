@@ -10,7 +10,6 @@
 
 //! The exponential distribution.
 
-use core::kinds::Copy;
 use core::num::Float;
 
 use {Rng, Rand};
@@ -30,9 +29,8 @@ use distributions::{ziggurat, ziggurat_tables, Sample, IndependentSample};
 /// Generate Normal Random
 /// Samples*](http://www.doornik.com/research/ziggurat.pdf). Nuffield
 /// College, Oxford
+#[derive(Copy)]
 pub struct Exp1(pub f64);
-
-impl Copy for Exp1 {}
 
 // This could be done via `-rng.gen::<f64>().ln()` but that is slower.
 impl Rand for Exp1 {
@@ -66,15 +64,14 @@ impl Rand for Exp1 {
 /// use std::rand::distributions::{Exp, IndependentSample};
 ///
 /// let exp = Exp::new(2.0);
-/// let v = exp.ind_sample(&mut rand::task_rng());
+/// let v = exp.ind_sample(&mut rand::thread_rng());
 /// println!("{} is from a Exp(2) distribution", v);
 /// ```
+#[derive(Copy)]
 pub struct Exp {
     /// `lambda` stored as `1/lambda`, since this is what we scale by.
     lambda_inverse: f64
 }
-
-impl Copy for Exp {}
 
 impl Exp {
     /// Construct a new `Exp` with the given shape parameter
@@ -97,7 +94,7 @@ impl IndependentSample<f64> for Exp {
 
 #[cfg(test)]
 mod test {
-    use std::prelude::*;
+    use std::prelude::v1::*;
 
     use distributions::{Sample, IndependentSample};
     use super::Exp;
@@ -127,7 +124,7 @@ mod test {
 mod bench {
     extern crate test;
 
-    use std::prelude::*;
+    use std::prelude::v1::*;
 
     use self::test::Bencher;
     use std::mem::size_of;

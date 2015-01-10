@@ -8,21 +8,27 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Abstraction of a task pool for basic parallelism.
+//! Abstraction of a thread pool for basic parallelism.
+
+#![unstable = "the semantics of a failing task and whether a thread is \
+               re-attached to a thread pool are somewhat unclear, and the \
+               utility of this type in `std::sync` is questionable with \
+               respect to the jobs of other primitives"]
 
 use core::prelude::*;
 
-use task::spawn;
-use comm::{channel, Sender, Receiver};
 use sync::{Arc, Mutex};
+use sync::mpsc::{channel, Sender, Receiver};
+use thread::Thread;
+use thunk::Thunk;
 
 struct Sentinel<'a> {
-    jobs: &'a Arc<Mutex<Receiver<proc(): Send>>>,
+    jobs: &'a Arc<Mutex<Receiver<Thunk>>>,
     active: bool
 }
 
 impl<'a> Sentinel<'a> {
-    fn new(jobs: &Arc<Mutex<Receiver<proc(): Send>>>) -> Sentinel {
+    fn new(jobs: &Arc<Mutex<Receiver<Thunk>>>) -> Sentinel {
         Sentinel {
             jobs: jobs,
             active: true
@@ -44,78 +50,81 @@ impl<'a> Drop for Sentinel<'a> {
     }
 }
 
-/// A task pool used to execute functions in parallel.
+/// A thread pool used to execute functions in parallel.
 ///
-/// Spawns `n` worker tasks and replenishes the pool if any worker tasks
+/// Spawns `n` worker threads and replenishes the pool if any worker threads
 /// panic.
 ///
 /// # Example
 ///
 /// ```rust
-/// # use std::sync::TaskPool;
-/// # use std::iter::AdditiveIterator;
+/// use std::sync::TaskPool;
+/// use std::iter::AdditiveIterator;
+/// use std::sync::mpsc::channel;
 ///
 /// let pool = TaskPool::new(4u);
 ///
 /// let (tx, rx) = channel();
 /// for _ in range(0, 8u) {
 ///     let tx = tx.clone();
-///     pool.execute(proc() {
-///         tx.send(1u);
+///     pool.execute(move|| {
+///         tx.send(1u).unwrap();
 ///     });
 /// }
 ///
 /// assert_eq!(rx.iter().take(8u).sum(), 8u);
 /// ```
 pub struct TaskPool {
-    // How the taskpool communicates with subtasks.
+    // How the threadpool communicates with subthreads.
     //
-    // This is the only such Sender, so when it is dropped all subtasks will
+    // This is the only such Sender, so when it is dropped all subthreads will
     // quit.
-    jobs: Sender<proc(): Send>
+    jobs: Sender<Thunk>
 }
 
 impl TaskPool {
-    /// Spawns a new task pool with `tasks` tasks.
+    /// Spawns a new thread pool with `threads` threads.
     ///
     /// # Panics
     ///
-    /// This function will panic if `tasks` is 0.
-    pub fn new(tasks: uint) -> TaskPool {
-        assert!(tasks >= 1);
+    /// This function will panic if `threads` is 0.
+    pub fn new(threads: uint) -> TaskPool {
+        assert!(threads >= 1);
 
-        let (tx, rx) = channel::<proc(): Send>();
+        let (tx, rx) = channel::<Thunk>();
         let rx = Arc::new(Mutex::new(rx));
 
-        // Taskpool tasks.
-        for _ in range(0, tasks) {
+        // Threadpool threads
+        for _ in range(0, threads) {
             spawn_in_pool(rx.clone());
         }
 
         TaskPool { jobs: tx }
     }
 
-    /// Executes the function `job` on a task in the pool.
-    pub fn execute(&self, job: proc():Send) {
-        self.jobs.send(job);
+    /// Executes the function `job` on a thread in the pool.
+    pub fn execute<F>(&self, job: F)
+        where F : FnOnce(), F : Send
+    {
+        self.jobs.send(Thunk::new(job)).unwrap();
     }
 }
 
-fn spawn_in_pool(jobs: Arc<Mutex<Receiver<proc(): Send>>>) {
-    spawn(proc() {
-        // Will spawn a new task on panic unless it is cancelled.
+fn spawn_in_pool(jobs: Arc<Mutex<Receiver<Thunk>>>) {
+    Thread::spawn(move |:| {
+        // Will spawn a new thread on panic unless it is cancelled.
         let sentinel = Sentinel::new(&jobs);
 
         loop {
             let message = {
                 // Only lock jobs for the time it takes
                 // to get a job, not run it.
-                let lock = jobs.lock();
-                lock.recv_opt()
+                let lock = jobs.lock().unwrap();
+                lock.recv()
             };
 
             match message {
-                Ok(job) => job(),
+                Ok(job) => job.invoke(()),
 
                 // The Taskpool was dropped.
                 Err(..) => break
@@ -123,15 +132,14 @@ fn spawn_in_pool(jobs: Arc<Mutex<Receiver<proc(): Send>>>) {
         }
 
         sentinel.cancel();
-    })
+    });
 }
 
 #[cfg(test)]
 mod test {
-    use core::prelude::*;
+    use prelude::v1::*;
     use super::*;
-    use comm::channel;
-    use iter::range;
+    use sync::mpsc::channel;
 
     const TEST_TASKS: uint = 4u;
 
@@ -144,8 +152,8 @@ mod test {
         let (tx, rx) = channel();
         for _ in range(0, TEST_TASKS) {
             let tx = tx.clone();
-            pool.execute(proc() {
-                tx.send(1u);
+            pool.execute(move|| {
+                tx.send(1u).unwrap();
             });
         }
 
@@ -164,17 +172,17 @@ mod test {
 
         let pool = TaskPool::new(TEST_TASKS);
 
-        // Panic all the existing tasks.
+        // Panic all the existing threads.
         for _ in range(0, TEST_TASKS) {
-            pool.execute(proc() { panic!() });
+            pool.execute(move|| -> () { panic!() });
         }
 
-        // Ensure new tasks were spawned to compensate.
+        // Ensure new threads were spawned to compensate.
         let (tx, rx) = channel();
         for _ in range(0, TEST_TASKS) {
             let tx = tx.clone();
-            pool.execute(proc() {
-                tx.send(1u);
+            pool.execute(move|| {
+                tx.send(1u).unwrap();
             });
         }
 
@@ -188,10 +196,10 @@ mod test {
         let pool = TaskPool::new(TEST_TASKS);
         let waiter = Arc::new(Barrier::new(TEST_TASKS + 1));
 
-        // Panic all the existing tasks in a bit.
+        // Panic all the existing threads in a bit.
         for _ in range(0, TEST_TASKS) {
             let waiter = waiter.clone();
-            pool.execute(proc() {
+            pool.execute(move|| {
                 waiter.wait();
                 panic!();
             });
@@ -203,4 +211,3 @@ mod test {
         waiter.wait();
     }
 }
-

@@ -8,10 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![experimental]
-#![macro_escape]
+#![unstable]
 #![doc(hidden)]
 
-macro_rules! int_module (($T:ty) => (
+macro_rules! int_module { ($T:ty) => (
 
-))
+) }

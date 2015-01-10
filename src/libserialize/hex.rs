@@ -18,7 +18,7 @@ use std::fmt;
 use std::error;
 
 /// A trait for converting a value to hexadecimal encoding
-pub trait ToHex for Sized? {
+pub trait ToHex {
     /// Converts the value of `self` to a hex value, returning the owned
     /// string.
     fn to_hex(&self) -> String;
@@ -54,21 +54,20 @@ impl ToHex for [u8] {
 }
 
 /// A trait for converting hexadecimal encoded values
-pub trait FromHex for Sized? {
+pub trait FromHex {
     /// Converts the value of `self`, interpreted as hexadecimal encoded data,
     /// into an owned vector of bytes, returning the vector.
     fn from_hex(&self) -> Result<Vec<u8>, FromHexError>;
 }
 
 /// Errors that can occur when decoding a hex encoded string
+#[derive(Copy)]
 pub enum FromHexError {
     /// The input contained a character not part of the hex format
     InvalidHexCharacter(char, uint),
     /// The input had an invalid length
     InvalidHexLength,
 }
-
-impl Copy for FromHexError {}
 
 impl fmt::Show for FromHexError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -89,7 +88,7 @@ impl error::Error for FromHexError {
     }
 
     fn detail(&self) -> Option<String> {
-        Some(self.to_string())
+        Some(format!("{:?}", self))
     }
 }
 
@@ -113,7 +112,7 @@ impl FromHex for str {
     ///     let hello_str = "Hello, World".as_bytes().to_hex();
     ///     println!("{}", hello_str);
     ///     let bytes = hello_str.as_slice().from_hex().unwrap();
-    ///     println!("{}", bytes);
+    ///     println!("{:?}", bytes);
     ///     let result_str = String::from_utf8(bytes).unwrap();
     ///     println!("{}", result_str);
     /// }

@@ -24,8 +24,8 @@
 //! Rust's collections can be grouped into four major categories:
 //!
 //! * Sequences: `Vec`, `RingBuf`, `DList`, `BitV`
-//! * Maps: `HashMap`, `BTreeMap`, `TreeMap`, `TrieMap`, `VecMap`, `LruCache`
-//! * Sets: `HashSet`, `BTreeSet`, `TreeSet`, `TrieSet`, `BitVSet`, `EnumSet`
+//! * Maps: `HashMap`, `BTreeMap`, `VecMap`
+//! * Sets: `HashSet`, `BTreeSet`, `BitVSet`
 //! * Misc: `BinaryHeap`
 //!
 //! # When Should You Use Which Collection?
@@ -64,16 +64,6 @@
 //! * You want to be able to get all of the entries in order on-demand.
 //! * You want a sorted map.
 //!
-//! ### Use a `TreeMap` when:
-//! * You want a `BTreeMap`, but can't tolerate inconsistent performance.
-//! * You want a `BTreeMap`, but have *very large* keys or values.
-//! * You want a `BTreeMap`, but have keys that are expensive to compare.
-//! * You want a `BTreeMap`, but you accept arbitrary untrusted inputs.
-//!
-//! ### Use a `TrieMap` when:
-//! * You want a `HashMap`, but with many potentially large `uint` keys.
-//! * You want a `BTreeMap`, but with potentially large `uint` keys.
-//!
 //! ### Use a `VecMap` when:
 //! * You want a `HashMap` but with known to be small `uint` keys.
 //! * You want a `BTreeMap`, but with known to be small `uint` keys.
@@ -90,17 +80,10 @@
 //! ### Use a `BitVSet` when:
 //! * You want a `VecSet`.
 //!
-//! ### Use an `EnumSet` when:
-//! * You want a C-like enum, stored in a single `uint`.
-//!
 //! ### Use a `BinaryHeap` when:
 //! * You want to store a bunch of elements, but only ever want to process the "biggest"
 //! or "most important" one at any given time.
 //! * You want a priority queue.
-//!
-//! ### Use an `LruCache` when:
-//! * You want a cache that discards infrequently used items when it becomes full.
-//! * You want a least-recently-used cache.
 //!
 //! # Correct and Efficient Usage of Collections
 //!
@@ -243,7 +226,7 @@
 //! the key has been seen or not. Normally, this would require a `find` followed by an
 //! `insert`, effectively duplicating the search effort on each insertion.
 //!
-//! When a user calls `map.entry(key)`, the map will search for the key and then yield
+//! When a user calls `map.entry(&key)`, the map will search for the key and then yield
 //! a variant of the `Entry` enum.
 //!
 //! If a `Vacant(entry)` is yielded, then the key *was not* found. In this case the
@@ -273,7 +256,7 @@
 //!
 //! for c in message.chars() {
 //!     match count.entry(c) {
-//!         Vacant(entry) => { entry.set(1u); },
+//!         Vacant(entry) => { entry.insert(1u); },
 //!         Occupied(mut entry) => *entry.get_mut() += 1,
 //!     }
 //! }
@@ -308,7 +291,7 @@
 //!     // If this is the first time we've seen this customer, initialize them
 //!     // with no blood alcohol. Otherwise, just retrieve them.
 //!     let person = match blood_alcohol.entry(id) {
-//!         Vacant(entry) => entry.set(Person{id: id, blood_alcohol: 0.0}),
+//!         Vacant(entry) => entry.insert(Person{id: id, blood_alcohol: 0.0}),
 //!         Occupied(entry) => entry.into_mut(),
 //!     };
 //!
@@ -326,29 +309,34 @@
 //! }
 //! ```
 
-#![experimental]
+#![stable]
 
 pub use core_collections::{BinaryHeap, Bitv, BitvSet, BTreeMap, BTreeSet};
-pub use core_collections::{DList, EnumSet, RingBuf};
-pub use core_collections::{TreeMap, TreeSet, TrieMap, TrieSet, VecMap};
+pub use core_collections::{DList, RingBuf, VecMap};
 
-pub use core_collections::{binary_heap, bitv, bitv_set, btree_map, btree_set, dlist, enum_set};
-pub use core_collections::{ring_buf, tree_map, tree_set, trie_map, trie_set, vec_map};
+pub use core_collections::{binary_heap, bitv, bitv_set, btree_map, btree_set};
+pub use core_collections::{dlist, ring_buf, vec_map};
 
 pub use self::hash_map::HashMap;
 pub use self::hash_set::HashSet;
-pub use self::lru_cache::LruCache;
 
 mod hash;
 
+#[stable]
 pub mod hash_map {
     //! A hashmap
     pub use super::hash::map::*;
 }
 
+#[stable]
 pub mod hash_set {
     //! A hashset
     pub use super::hash::set::*;
 }
 
-pub mod lru_cache;
+/// Experimental support for providing custom hash algorithms to a HashMap and
+/// HashSet.
+#[unstable = "module was recently added"]
+pub mod hash_state {
+    pub use super::hash::state::*;
+}

@@ -174,7 +174,7 @@
     "if" "impl" "in"
     "let" "loop"
     "match" "mod" "move" "mut"
-    "priv" "proc" "pub"
+    "priv" "pub"
     "ref" "return"
     "self" "static" "struct" "super"
     "true" "trait" "type"
@@ -189,7 +189,7 @@
     "u64" "i64"
 
     "f32" "f64"
-    "float" "int" "uint"
+    "float" "int" "uint" "isize" "usize"
     "bool"
     "str" "char"))
 

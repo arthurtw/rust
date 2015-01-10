@@ -78,18 +78,19 @@
 //! ```
 
 #![crate_name = "getopts"]
-#![experimental]
+#![unstable = "use the crates.io `getopts` library instead"]
+#![staged_api]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
        html_root_url = "http://doc.rust-lang.org/nightly/",
        html_playground_url = "http://play.rust-lang.org/")]
-#![feature(globs, phase)]
-#![feature(import_shadowing)]
+#![feature(slicing_syntax)]
+#![allow(unknown_features)] #![feature(int_uint)]
 #![deny(missing_docs)]
 
-#[cfg(test)] #[phase(plugin, link)] extern crate log;
+#[cfg(test)] #[macro_use] extern crate log;
 
 use self::Name::*;
 use self::HasArg::*;
@@ -101,12 +102,11 @@ use self::Whitespace::*;
 use self::LengthLimit::*;
 
 use std::fmt;
-use std::result::Result::{Err, Ok};
+use std::iter::repeat;
 use std::result;
-use std::string::String;
 
 /// Name of an option. Either a string or a single char.
-#[deriving(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Show)]
 pub enum Name {
     /// A string representing the long name of an option.
     /// For example: "help"
@@ -117,7 +117,7 @@ pub enum Name {
 }
 
 /// Describes whether an option has an argument.
-#[deriving(Clone, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Show)]
 pub enum HasArg {
     /// The option requires an argument.
     Yes,
@@ -127,10 +127,8 @@ pub enum HasArg {
     Maybe,
 }
 
-impl Copy for HasArg {}
-
 /// Describes how often an option may occur.
-#[deriving(Clone, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Show)]
 pub enum Occur {
     /// The option occurs once.
     Req,
@@ -140,10 +138,8 @@ pub enum Occur {
     Multi,
 }
 
-impl Copy for Occur {}
-
 /// A description of a possible option.
-#[deriving(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Show)]
 pub struct Opt {
     /// Name of the option
     pub name: Name,
@@ -157,7 +153,7 @@ pub struct Opt {
 
 /// One group of options, e.g., both `-h` and `--help`, along with
 /// their shared description and properties.
-#[deriving(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Show)]
 pub struct OptGroup {
     /// Short name of the option, e.g. `h` for a `-h` option
     pub short_name: String,
@@ -174,7 +170,7 @@ pub struct OptGroup {
 }
 
 /// Describes whether an option is given at all or has a value.
-#[deriving(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Show)]
 enum Optval {
     Val(String),
     Given,
@@ -182,7 +178,7 @@ enum Optval {
 
 /// The result of checking command line arguments. Contains a vector
 /// of matches and a vector of free strings.
-#[deriving(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Show)]
 pub struct Matches {
     /// Options that matched
     opts: Vec<Opt>,
@@ -195,7 +191,7 @@ pub struct Matches {
 /// The type returned when the command line does not conform to the
 /// expected format. Use the `Show` implementation to output detailed
 /// information.
-#[deriving(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Show)]
 pub enum Fail {
     /// The option requires an argument but none was passed.
     ArgumentMissing(String),
@@ -210,7 +206,7 @@ pub enum Fail {
 }
 
 /// The type of failure that occurred.
-#[deriving(PartialEq, Eq)]
+#[derive(Copy, PartialEq, Eq, Show)]
 #[allow(missing_docs)]
 pub enum FailType {
     ArgumentMissing_,
@@ -219,8 +215,6 @@ pub enum FailType {
     OptionDuplicated_,
     UnexpectedArgument_,
 }
-
-impl Copy for FailType {}
 
 /// The result of parsing a command line with a set of options.
 pub type Result = result::Result<Matches, Fail>;
@@ -288,7 +282,7 @@ impl OptGroup {
 
 impl Matches {
     fn opt_vals(&self, nm: &str) -> Vec<Optval> {
-        match find_opt(self.opts.as_slice(), Name::from_str(nm)) {
+        match find_opt(&self.opts[], Name::from_str(nm)) {
             Some(id) => self.vals[id].clone(),
             None => panic!("No option '{}' defined", nm)
         }
@@ -316,8 +310,7 @@ impl Matches {
     /// Returns true if any of several options were matched.
     pub fn opts_present(&self, names: &[String]) -> bool {
         for nm in names.iter() {
-            match find_opt(self.opts.as_slice(),
-                           Name::from_str(nm.as_slice())) {
+            match find_opt(self.opts.as_slice(), Name::from_str(&nm[])) {
                 Some(id) if !self.vals[id].is_empty() => return true,
                 _ => (),
             };
@@ -328,7 +321,7 @@ impl Matches {
     /// Returns the string argument supplied to one of several matching options or `None`.
     pub fn opts_str(&self, names: &[String]) -> Option<String> {
         for nm in names.iter() {
-            match self.opt_val(nm.as_slice()) {
+            match self.opt_val(&nm[]) {
                 Some(Val(ref s)) => return Some(s.clone()),
                 _ => ()
             }
@@ -544,13 +537,13 @@ pub fn opt(short_name: &str,
 
 impl Fail {
     /// Convert a `Fail` enum into an error string.
-    #[deprecated="use `Show` (`{}` format specifier)"]
+    #[deprecated="use `fmt::String` (`{}` format specifier)"]
     pub fn to_err_msg(self) -> String {
         self.to_string()
     }
 }
 
-impl fmt::Show for Fail {
+impl fmt::String for Fail {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             ArgumentMissing(ref nm) => {
@@ -586,14 +579,14 @@ pub fn getopts(args: &[String], optgrps: &[OptGroup]) -> Result {
 
     fn f(_x: uint) -> Vec<Optval> { return Vec::new(); }
 
-    let mut vals = Vec::from_fn(n_opts, f);
+    let mut vals: Vec<_> = range(0, n_opts).map(f).collect();
     let mut free: Vec<String> = Vec::new();
     let l = args.len();
     let mut i = 0;
     while i < l {
         let cur = args[i].clone();
         let curlen = cur.len();
-        if !is_arg(cur.as_slice()) {
+        if !is_arg(&cur[]) {
             free.push(cur);
         } else if cur == "--" {
             let mut j = i + 1;
@@ -603,7 +596,7 @@ pub fn getopts(args: &[String], optgrps: &[OptGroup]) -> Result {
             let mut names;
             let mut i_arg = None;
             if cur.as_bytes()[1] == b'-' {
-                let tail = cur.slice(2, curlen);
+                let tail = &cur[2..curlen];
                 let tail_eq: Vec<&str> = tail.split('=').collect();
                 if tail_eq.len() <= 1 {
                     names = vec!(Long(tail.to_string()));
@@ -639,7 +632,7 @@ pub fn getopts(args: &[String], optgrps: &[OptGroup]) -> Result {
                     };
 
                     if arg_follows && range.next < curlen {
-                        i_arg = Some(cur.slice(range.next, curlen).to_string());
+                        i_arg = Some((&cur[range.next..curlen]).to_string());
                         break;
                     }
 
@@ -658,29 +651,34 @@ pub fn getopts(args: &[String], optgrps: &[OptGroup]) -> Result {
                     if name_pos == names.len() && !i_arg.is_none() {
                         return Err(UnexpectedArgument(nm.to_string()));
                     }
-                    vals[optid].push(Given);
+                    let v = &mut vals[optid];
+                    v.push(Given);
                   }
                   Maybe => {
                     if !i_arg.is_none() {
-                        vals[optid]
-                            .push(Val((i_arg.clone())
+                        let v = &mut vals[optid];
+                        v.push(Val((i_arg.clone())
                             .unwrap()));
                     } else if name_pos < names.len() || i + 1 == l ||
-                            is_arg(args[i + 1].as_slice()) {
-                        vals[optid].push(Given);
+                            is_arg(&args[i + 1][]) {
+                        let v = &mut vals[optid];
+                        v.push(Given);
                     } else {
                         i += 1;
-                        vals[optid].push(Val(args[i].clone()));
+                        let v = &mut vals[optid];
+                        v.push(Val(args[i].clone()));
                     }
                   }
                   Yes => {
                     if !i_arg.is_none() {
-                        vals[optid].push(Val(i_arg.clone().unwrap()));
+                        let v = &mut vals[optid];
+                        v.push(Val(i_arg.clone().unwrap()));
                     } else if i + 1 == l {
                         return Err(ArgumentMissing(nm.to_string()));
                     } else {
                         i += 1;
-                        vals[optid].push(Val(args[i].clone()));
+                        let v = &mut vals[optid];
+                        v.push(Val(args[i].clone()));
                     }
                   }
                 }
@@ -708,7 +706,7 @@ pub fn getopts(args: &[String], optgrps: &[OptGroup]) -> Result {
 /// Derive a usage message from a set of long options.
 pub fn usage(brief: &str, opts: &[OptGroup]) -> String {
 
-    let desc_sep = format!("\n{}", " ".repeat(24));
+    let desc_sep = format!("\n{}", repeat(" ").take(24).collect::<String>());
 
     let rows = opts.iter().map(|optref| {
         let OptGroup{short_name,
@@ -718,14 +716,14 @@ pub fn usage(brief: &str, opts: &[OptGroup]) -> String {
                      hasarg,
                      ..} = (*optref).clone();
 
-        let mut row = " ".repeat(4);
+        let mut row = repeat(" ").take(4).collect::<String>();
 
         // short option
         match short_name.len() {
             0 => {}
             1 => {
                 row.push('-');
-                row.push_str(short_name.as_slice());
+                row.push_str(&short_name[]);
                 row.push(' ');
             }
             _ => panic!("the short name should only be 1 ascii char long"),
@@ -736,7 +734,7 @@ pub fn usage(brief: &str, opts: &[OptGroup]) -> String {
             0 => {}
             _ => {
                 row.push_str("--");
-                row.push_str(long_name.as_slice());
+                row.push_str(&long_name[]);
                 row.push(' ');
             }
         }
@@ -744,23 +742,23 @@ pub fn usage(brief: &str, opts: &[OptGroup]) -> String {
         // arg
         match hasarg {
             No => {}
-            Yes => row.push_str(hint.as_slice()),
+            Yes => row.push_str(&hint[]),
             Maybe => {
                 row.push('[');
-                row.push_str(hint.as_slice());
+                row.push_str(&hint[]);
                 row.push(']');
             }
         }
 
         // FIXME: #5516 should be graphemes not codepoints
         // here we just need to indent the start of the description
-        let rowlen = row.char_len();
+        let rowlen = row.chars().count();
         if rowlen < 24 {
             for _ in range(0, 24 - rowlen) {
                 row.push(' ');
             }
         } else {
-            row.push_str(desc_sep.as_slice())
+            row.push_str(&desc_sep[]);
         }
 
         // Normalize desc to contain words separated by one space character
@@ -772,16 +770,14 @@ pub fn usage(brief: &str, opts: &[OptGroup]) -> String {
 
         // FIXME: #5516 should be graphemes not codepoints
         let mut desc_rows = Vec::new();
-        each_split_within(desc_normalized_whitespace.as_slice(),
-                          54,
-                          |substr| {
+        each_split_within(&desc_normalized_whitespace[], 54, |substr| {
             desc_rows.push(substr.to_string());
             true
         });
 
         // FIXME: #5516 should be graphemes not codepoints
         // wrapped description
-        row.push_str(desc_rows.connect(desc_sep.as_slice()).as_slice());
+        row.push_str(&desc_rows.connect(&desc_sep[])[]);
 
         row
     });
@@ -800,10 +796,10 @@ fn format_option(opt: &OptGroup) -> String {
     // Use short_name is possible, but fallback to long_name.
     if opt.short_name.len() > 0 {
         line.push('-');
-        line.push_str(opt.short_name.as_slice());
+        line.push_str(&opt.short_name[]);
     } else {
         line.push_str("--");
-        line.push_str(opt.long_name.as_slice());
+        line.push_str(&opt.long_name[]);
     }
 
     if opt.hasarg != No {
@@ -811,7 +807,7 @@ fn format_option(opt: &OptGroup) -> String {
         if opt.hasarg == Maybe {
             line.push('[');
         }
-        line.push_str(opt.hint.as_slice());
+        line.push_str(&opt.hint[]);
         if opt.hasarg == Maybe {
             line.push(']');
         }
@@ -830,30 +826,29 @@ fn format_option(opt: &OptGroup) -> String {
 /// Derive a short one-line usage summary from a set of long options.
 pub fn short_usage(program_name: &str, opts: &[OptGroup]) -> String {
     let mut line = format!("Usage: {} ", program_name);
-    line.push_str(opts.iter()
-                      .map(format_option)
-                      .collect::<Vec<String>>()
-                      .connect(" ")
-                      .as_slice());
+    line.push_str(&opts.iter()
+                       .map(format_option)
+                       .collect::<Vec<String>>()
+                       .connect(" ")[]);
     line
 }
 
+#[derive(Copy)]
 enum SplitWithinState {
     A,  // leading whitespace, initial state
     B,  // words
     C,  // internal and trailing whitespace
 }
-impl Copy for SplitWithinState {}
+#[derive(Copy)]
 enum Whitespace {
     Ws, // current char is whitespace
     Cr  // current char is not whitespace
 }
-impl Copy for Whitespace {}
+#[derive(Copy)]
 enum LengthLimit {
     UnderLim, // current char makes current substring still fit in limit
     OverLim   // current char makes current substring no longer fit in limit
 }
-impl Copy for LengthLimit {}
 
 
 /// Splits a string into substrings with possibly internal whitespace,
@@ -867,8 +862,9 @@ impl Copy for LengthLimit {}
 ///
 /// Panics during iteration if the string contains a non-whitespace
 /// sequence longer than the limit.
-fn each_split_within<'a>(ss: &'a str, lim: uint, it: |&'a str| -> bool)
-                     -> bool {
+fn each_split_within<F>(ss: &str, lim: uint, mut it: F) -> bool where
+    F: FnMut(&str) -> bool
+{
     // Just for fun, let's write this as a state machine:
 
     let mut slice_start = 0;
@@ -885,7 +881,7 @@ fn each_split_within<'a>(ss: &'a str, lim: uint, it: |&'a str| -> bool)
         lim = fake_i;
     }
 
-    let machine: |&mut bool, (uint, char)| -> bool = |cont, (i, c)| {
+    let mut machine = |&mut: cont: &mut bool, (i, c): (uint, char)| -> bool {
         let whitespace = if c.is_whitespace() { Ws }       else { Cr };
         let limit      = if (i - slice_start + 1) <= lim  { UnderLim } else { OverLim };
 
@@ -896,9 +892,9 @@ fn each_split_within<'a>(ss: &'a str, lim: uint, it: |&'a str| -> bool)
             (B, Cr, UnderLim) => { B }
             (B, Cr, OverLim)  if (i - last_start + 1) > lim
                             => panic!("word starting with {} longer than limit!",
-                                    ss.slice(last_start, i + 1)),
+                                      &ss[last_start..(i + 1)]),
             (B, Cr, OverLim)  => {
-                *cont = it(ss.slice(slice_start, last_end));
+                *cont = it(&ss[slice_start..last_end]);
                 slice_start = last_start;
                 B
             }
@@ -908,7 +904,7 @@ fn each_split_within<'a>(ss: &'a str, lim: uint, it: |&'a str| -> bool)
             }
             (B, Ws, OverLim)  => {
                 last_end = i;
-                *cont = it(ss.slice(slice_start, last_end));
+                *cont = it(&ss[slice_start..last_end]);
                 A
             }
 
@@ -917,14 +913,14 @@ fn each_split_within<'a>(ss: &'a str, lim: uint, it: |&'a str| -> bool)
                 B
             }
             (C, Cr, OverLim)  => {
-                *cont = it(ss.slice(slice_start, last_end));
+                *cont = it(&ss[slice_start..last_end]);
                 slice_start = i;
                 last_start = i;
                 last_end = i;
                 B
             }
             (C, Ws, OverLim)  => {
-                *cont = it(ss.slice(slice_start, last_end));
+                *cont = it(&ss[slice_start..last_end]);
                 A
             }
             (C, Ws, UnderLim) => {
@@ -1568,10 +1564,10 @@ Options:
     #[test]
     fn test_usage_description_multibyte_handling() {
         let optgroups = vec!(
-            optflag("k", "k\u2013w\u2013",
+            optflag("k", "k\u{2013}w\u{2013}",
                 "The word kiwi is normally spelled with two i's"),
             optflag("a", "apple",
-                "This \u201Cdescription\u201D has some characters that could \
+                "This \u{201C}description\u{201D} has some characters that could \
 confuse the line wrapping; an apple costs 0.51€ in some parts of Europe."));
 
         let expected =

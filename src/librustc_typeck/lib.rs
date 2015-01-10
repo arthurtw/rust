@@ -64,20 +64,24 @@ This API is completely unstable and subject to change.
 */
 
 #![crate_name = "rustc_typeck"]
-#![experimental]
+#![unstable]
+#![staged_api]
 #![crate_type = "dylib"]
 #![crate_type = "rlib"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
       html_favicon_url = "http://www.rust-lang.org/favicon.ico",
       html_root_url = "http://doc.rust-lang.org/nightly/")]
 
-#![feature(default_type_params, globs, if_let, import_shadowing, macro_rules, phase, quote)]
-#![feature(slicing_syntax, tuple_indexing, unsafe_destructor)]
+#![allow(unknown_features)]
+#![feature(quote)]
+#![feature(slicing_syntax, unsafe_destructor)]
+#![feature(box_syntax)]
 #![feature(rustc_diagnostic_macros)]
+#![allow(unknown_features)] #![feature(int_uint)]
 #![allow(non_camel_case_types)]
 
-#[phase(plugin, link)] extern crate log;
-#[phase(plugin, link)] extern crate syntax;
+#[macro_use] extern crate log;
+#[macro_use] extern crate syntax;
 
 extern crate arena;
 extern crate rustc;
@@ -89,11 +93,10 @@ pub use rustc::session;
 pub use rustc::util;
 
 use middle::def;
-use middle::resolve;
 use middle::infer;
 use middle::subst;
 use middle::subst::VecPerParamSpace;
-use middle::ty::{mod, Ty};
+use middle::ty::{self, Ty};
 use session::config;
 use util::common::time;
 use util::ppaux::Repr;
@@ -102,9 +105,7 @@ use util::ppaux;
 use syntax::codemap::Span;
 use syntax::print::pprust::*;
 use syntax::{ast, ast_map, abi};
-
-#[cfg(stage0)]
-mod diagnostics;
+use syntax::ast_util::local_def;
 
 mod check;
 mod rscope;
@@ -120,8 +121,8 @@ struct TypeAndSubsts<'tcx> {
 
 struct CrateCtxt<'a, 'tcx: 'a> {
     // A mapping from method call sites to traits that have that method.
-    trait_map: resolve::TraitMap,
-    tcx: &'a ty::ctxt<'tcx>
+    trait_map: ty::TraitMap,
+    tcx: &'a ty::ctxt<'tcx>,
 }
 
 // Functions that write types into the node type table
@@ -158,22 +159,27 @@ fn lookup_def_ccx(ccx: &CrateCtxt, sp: Span, id: ast::NodeId)
     lookup_def_tcx(ccx.tcx, sp, id)
 }
 
-fn no_params<'tcx>(t: Ty<'tcx>) -> ty::Polytype<'tcx> {
-    ty::Polytype {
-        generics: ty::Generics {types: VecPerParamSpace::empty(),
-                                regions: VecPerParamSpace::empty()},
+fn no_params<'tcx>(t: Ty<'tcx>) -> ty::TypeScheme<'tcx> {
+    ty::TypeScheme {
+        generics: ty::Generics {
+            types: VecPerParamSpace::empty(),
+            regions: VecPerParamSpace::empty(),
+            predicates: VecPerParamSpace::empty(),
+        },
         ty: t
     }
 }
 
-fn require_same_types<'a, 'tcx>(tcx: &ty::ctxt<'tcx>,
-                                    maybe_infcx: Option<&infer::InferCtxt<'a, 'tcx>>,
-                                    t1_is_expected: bool,
-                                    span: Span,
-                                    t1: Ty<'tcx>,
-                                    t2: Ty<'tcx>,
-                                    msg: || -> String)
-                                    -> bool {
+fn require_same_types<'a, 'tcx, M>(tcx: &ty::ctxt<'tcx>,
+                                   maybe_infcx: Option<&infer::InferCtxt<'a, 'tcx>>,
+                                   t1_is_expected: bool,
+                                   span: Span,
+                                   t1: Ty<'tcx>,
+                                   t2: Ty<'tcx>,
+                                   msg: M)
+                                   -> bool where
+    M: FnOnce() -> String,
+{
     let result = match maybe_infcx {
         None => {
             let infcx = infer::new_infer_ctxt(tcx);
@@ -188,10 +194,10 @@ fn require_same_types<'a, 'tcx>(tcx: &ty::ctxt<'tcx>,
         Ok(_) => true,
         Err(ref terr) => {
             tcx.sess.span_err(span,
-                              format!("{}: {}",
+                              &format!("{}: {}",
                                       msg(),
                                       ty::type_err_to_str(tcx,
-                                                          terr)).as_slice());
+                                                          terr))[]);
             ty::note_and_explain_type_err(tcx, terr);
             false
         }
@@ -219,15 +225,15 @@ fn check_main_fn_ty(ccx: &CrateCtxt,
                 }
                 _ => ()
             }
-            let se_ty = ty::mk_bare_fn(tcx, ty::BareFnTy {
-                fn_style: ast::NormalFn,
+            let se_ty = ty::mk_bare_fn(tcx, Some(local_def(main_id)), tcx.mk_bare_fn(ty::BareFnTy {
+                unsafety: ast::Unsafety::Normal,
                 abi: abi::Rust,
-                sig: ty::FnSig {
+                sig: ty::Binder(ty::FnSig {
                     inputs: Vec::new(),
                     output: ty::FnConverging(ty::mk_nil(tcx)),
                     variadic: false
-                }
-            });
+                })
+            }));
 
             require_same_types(tcx, None, false, main_span, main_t, se_ty,
                 || {
@@ -237,10 +243,10 @@ fn check_main_fn_ty(ccx: &CrateCtxt,
         }
         _ => {
             tcx.sess.span_bug(main_span,
-                              format!("main has a non-function type: found \
+                              &format!("main has a non-function type: found \
                                        `{}`",
                                       ppaux::ty_to_string(tcx,
-                                                       main_t)).as_slice());
+                                                       main_t))[]);
         }
     }
 }
@@ -251,7 +257,7 @@ fn check_start_fn_ty(ccx: &CrateCtxt,
     let tcx = ccx.tcx;
     let start_t = ty::node_id_to_type(tcx, start_id);
     match start_t.sty {
-        ty::ty_bare_fn(_) => {
+        ty::ty_bare_fn(..) => {
             match tcx.map.find(start_id) {
                 Some(ast_map::NodeItem(it)) => {
                     match it.node {
@@ -267,18 +273,18 @@ fn check_start_fn_ty(ccx: &CrateCtxt,
                 _ => ()
             }
 
-            let se_ty = ty::mk_bare_fn(tcx, ty::BareFnTy {
-                fn_style: ast::NormalFn,
+            let se_ty = ty::mk_bare_fn(tcx, Some(local_def(start_id)), tcx.mk_bare_fn(ty::BareFnTy {
+                unsafety: ast::Unsafety::Normal,
                 abi: abi::Rust,
-                sig: ty::FnSig {
+                sig: ty::Binder(ty::FnSig {
                     inputs: vec!(
-                        ty::mk_int(),
-                        ty::mk_imm_ptr(tcx, ty::mk_imm_ptr(tcx, ty::mk_u8()))
+                        tcx.types.int,
+                        ty::mk_imm_ptr(tcx, ty::mk_imm_ptr(tcx, tcx.types.u8))
                     ),
-                    output: ty::FnConverging(ty::mk_int()),
-                    variadic: false
-                }
-            });
+                    output: ty::FnConverging(tcx.types.int),
+                    variadic: false,
+                }),
+            }));
 
             require_same_types(tcx, None, false, start_span, start_t, se_ty,
                 || {
@@ -289,10 +295,9 @@ fn check_start_fn_ty(ccx: &CrateCtxt,
         }
         _ => {
             tcx.sess.span_bug(start_span,
-                              format!("start has a non-function type: found \
+                              &format!("start has a non-function type: found \
                                        `{}`",
-                                      ppaux::ty_to_string(tcx,
-                                                       start_t)).as_slice());
+                                      ppaux::ty_to_string(tcx, start_t))[]);
         }
     }
 }
@@ -310,7 +315,7 @@ fn check_for_entry_fn(ccx: &CrateCtxt) {
     }
 }
 
-pub fn check_crate(tcx: &ty::ctxt, trait_map: resolve::TraitMap) {
+pub fn check_crate(tcx: &ty::ctxt, trait_map: ty::TraitMap) {
     let time_passes = tcx.sess.time_passes();
     let ccx = CrateCtxt {
         trait_map: trait_map,
@@ -318,7 +323,7 @@ pub fn check_crate(tcx: &ty::ctxt, trait_map: resolve::TraitMap) {
     };
 
     time(time_passes, "type collecting", (), |_|
-        collect::collect_item_types(&ccx));
+         collect::collect_item_types(tcx));
 
     // this ensures that later parts of type checking can assume that items
     // have valid types and not error

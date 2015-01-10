@@ -15,12 +15,9 @@ use self::ResolveReason::*;
 
 use astconv::AstConv;
 use check::FnCtxt;
-use middle::def;
 use middle::pat_util;
-use middle::ty::{mod, Ty, MethodCall, MethodCallee};
+use middle::ty::{self, Ty, MethodCall, MethodCallee};
 use middle::ty_fold::{TypeFolder,TypeFoldable};
-use middle::infer::{force_all, resolve_all, resolve_region};
-use middle::infer::resolve_type;
 use middle::infer;
 use write_substs_to_tcx;
 use write_ty_to_tcx;
@@ -121,8 +118,7 @@ impl<'cx, 'tcx, 'v> Visitor<'v> for WritebackCx<'cx, 'tcx> {
                                     MethodCall::expr(e.id));
 
         match e.node {
-            ast::ExprClosure(_, _, ref decl, _) |
-            ast::ExprProc(ref decl, _) => {
+            ast::ExprClosure(_, _, ref decl, _) => {
                 for input in decl.inputs.iter() {
                     let _ = self.visit_node_id(ResolvingExpr(e.span),
                                                input.id);
@@ -173,7 +169,7 @@ impl<'cx, 'tcx, 'v> Visitor<'v> for WritebackCx<'cx, 'tcx> {
         match t.node {
             ast::TyFixedLengthVec(ref ty, ref count_expr) => {
                 self.visit_ty(&**ty);
-                write_ty_to_tcx(self.tcx(), count_expr.id, ty::mk_uint());
+                write_ty_to_tcx(self.tcx(), count_expr.id, self.tcx().types.uint);
             }
             _ => visit::walk_ty(self, t)
         }
@@ -270,25 +266,8 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
             Some(adjustment) => {
                 let adj_object = ty::adjust_is_object(&adjustment);
                 let resolved_adjustment = match adjustment {
-                    ty::AdjustAddEnv(store) => {
-                        // FIXME(eddyb) #2190 Allow only statically resolved
-                        // bare functions to coerce to a closure to avoid
-                        // constructing (slower) indirect call wrappers.
-                        match self.tcx().def_map.borrow().get(&id) {
-                            Some(&def::DefFn(..)) |
-                            Some(&def::DefStaticMethod(..)) |
-                            Some(&def::DefVariant(..)) |
-                            Some(&def::DefStruct(_)) => {
-                            }
-                            _ => {
-                                span_err!(self.tcx().sess, reason.span(self.tcx()), E0100,
-                                    "cannot coerce non-statically resolved bare fn to closure");
-                                span_help!(self.tcx().sess, reason.span(self.tcx()),
-                                    "consider embedding the function in a closure");
-                            }
-                        }
-
-                        ty::AdjustAddEnv(self.resolve(&store, reason))
+                    ty::AdjustReifyFnPointer(def_id) => {
+                        ty::AdjustReifyFnPointer(def_id)
                     }
 
                     ty::AdjustDerefRef(adj) => {
@@ -308,7 +287,7 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
                         })
                     }
                 };
-                debug!("Adjustments for node {}: {}", id, resolved_adjustment);
+                debug!("Adjustments for node {}: {:?}", id, resolved_adjustment);
                 self.tcx().adjustments.borrow_mut().insert(
                     id, resolved_adjustment);
             }
@@ -321,7 +300,7 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
         // Resolve any method map entry
         match self.fcx.inh.method_map.borrow_mut().remove(&method_call) {
             Some(method) => {
-                debug!("writeback::resolve_method_map_entry(call={}, entry={})",
+                debug!("writeback::resolve_method_map_entry(call={:?}, entry={})",
                        method_call,
                        method.repr(self.tcx()));
                 let new_method = MethodCallee {
@@ -338,14 +317,15 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
         }
     }
 
-    fn resolve<T:ResolveIn<'tcx>>(&self, t: &T, reason: ResolveReason) -> T {
-        t.resolve_in(&mut Resolver::new(self.fcx, reason))
+    fn resolve<T:TypeFoldable<'tcx>>(&self, t: &T, reason: ResolveReason) -> T {
+        t.fold_with(&mut Resolver::new(self.fcx, reason))
     }
 }
 
 ///////////////////////////////////////////////////////////////////////////
 // Resolution reason.
 
+#[derive(Copy)]
 enum ResolveReason {
     ResolvingExpr(Span),
     ResolvingLocal(Span),
@@ -353,8 +333,6 @@ enum ResolveReason {
     ResolvingUpvar(ty::UpvarId),
     ResolvingUnboxedClosure(ast::DefId),
 }
-
-impl Copy for ResolveReason {}
 
 impl ResolveReason {
     fn span(&self, tcx: &ty::ctxt) -> Span {
@@ -373,19 +351,6 @@ impl ResolveReason {
                 }
             }
         }
-    }
-}
-
-///////////////////////////////////////////////////////////////////////////
-// Convenience methods for resolving different kinds of things.
-
-trait ResolveIn<'tcx> {
-    fn resolve_in<'a>(&self, resolver: &mut Resolver<'a, 'tcx>) -> Self;
-}
-
-impl<'tcx, T: TypeFoldable<'tcx>> ResolveIn<'tcx> for T {
-    fn resolve_in<'a>(&self, resolver: &mut Resolver<'a, 'tcx>) -> T {
-        self.fold_with(resolver)
     }
 }
 
@@ -466,21 +431,19 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for Resolver<'cx, 'tcx> {
     }
 
     fn fold_ty(&mut self, t: Ty<'tcx>) -> Ty<'tcx> {
-        if !ty::type_needs_infer(t) {
-            return t;
-        }
-
-        match resolve_type(self.infcx, None, t, resolve_all | force_all) {
+        match self.infcx.fully_resolve(&t) {
             Ok(t) => t,
             Err(e) => {
+                debug!("Resolver::fold_ty: input type `{}` not fully resolvable",
+                       t.repr(self.tcx));
                 self.report_error(e);
-                ty::mk_err()
+                self.tcx().types.err
             }
         }
     }
 
     fn fold_region(&mut self, r: ty::Region) -> ty::Region {
-        match resolve_region(self.infcx, r, resolve_all | force_all) {
+        match self.infcx.fully_resolve(&r) {
             Ok(r) => r,
             Err(e) => {
                 self.report_error(e);

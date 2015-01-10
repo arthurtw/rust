@@ -8,14 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate rustrt;
-
+use std::ffi;
 use std::io::process::{Command, ProcessOutput};
 use std::os;
-use std::str;
+use std::rt::unwind::try;
 use std::rt;
-
-use rustrt::unwind::try;
+use std::str;
+use std::thread::Thread;
+use std::thunk::Thunk;
 
 #[start]
 fn start(argc: int, argv: *const *const u8) -> int {
@@ -26,19 +26,19 @@ fn start(argc: int, argv: *const *const u8) -> int {
                 2 => println!("foo"),
                 3 => assert!(try(|| {}).is_ok()),
                 4 => assert!(try(|| panic!()).is_err()),
-                5 => assert!(try(|| spawn(proc() {})).is_err()),
-                6 => assert!(Command::new("test").spawn().is_err()),
+                5 => assert!(Command::new("test").spawn().is_err()),
                 _ => panic!()
             }
         }
         return 0
     }
 
-    rt::start(argc, argv, main)
-}
-
-fn main() {
-    let args = os::args();
+    let args = unsafe {
+        range(0, argc as uint).map(|i| {
+            let ptr = *argv.offset(i as int) as *const _;
+            ffi::c_str_to_bytes(&ptr).to_vec()
+        }).collect::<Vec<_>>()
+    };
     let me = args[0].as_slice();
 
     let x: &[u8] = &[1u8];
@@ -51,13 +51,13 @@ fn main() {
     pass(Command::new(me).arg(x).output().unwrap());
     let x: &[u8] = &[5u8];
     pass(Command::new(me).arg(x).output().unwrap());
-    let x: &[u8] = &[6u8];
-    pass(Command::new(me).arg(x).output().unwrap());
+
+    0
 }
 
 fn pass(output: ProcessOutput) {
     if !output.status.success() {
-        println!("{}", str::from_utf8(output.output.as_slice()));
-        println!("{}", str::from_utf8(output.error.as_slice()));
+        println!("{:?}", str::from_utf8(output.output.as_slice()));
+        println!("{:?}", str::from_utf8(output.error.as_slice()));
     }
 }

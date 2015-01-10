@@ -12,7 +12,6 @@
 // deeply nested types that will fail the `Send` check by overflow
 // when the recursion limit is set very low.
 
-#![feature(macro_rules)]
 #![allow(dead_code)]
 #![recursion_limit="10"]
 
@@ -22,21 +21,21 @@ macro_rules! link {
     }
 }
 
-link!(A,B)
-link!(B,C)
-link!(C,D)
-link!(D,E)
-link!(E,F)
-link!(F,G)
-link!(G,H)
-link!(H,I)
-link!(I,J)
-link!(J,K)
-link!(K,L)
-link!(L,M)
-link!(M,N)
+link! { A, B }
+link! { B, C }
+link! { C, D }
+link! { D, E }
+link! { E, F }
+link! { F, G }
+link! { G, H }
+link! { H, I }
+link! { I, J }
+link! { J, K }
+link! { K, L }
+link! { L, M }
+link! { M, N }
 
-enum N { N(uint) }
+enum N { N(usize) }
 
 fn is_send<T:Send>() { }
 
@@ -44,8 +43,8 @@ fn main() {
     is_send::<A>();
     //~^ ERROR overflow evaluating
     //~^^ NOTE consider adding a `#![recursion_limit="20"]` attribute to your crate
-    //~^^^ NOTE must be implemented
+    //~^^^ NOTE required by `is_send`
     //~^^^^ ERROR overflow evaluating
     //~^^^^^ NOTE consider adding a `#![recursion_limit="20"]` attribute to your crate
-    //~^^^^^^ NOTE must be implemented
+    //~^^^^^^ NOTE required by `is_send`
 }

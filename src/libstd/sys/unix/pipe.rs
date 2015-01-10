@@ -8,17 +8,19 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use alloc::arc::Arc;
-use libc;
-use c_str::CString;
-use mem;
-use sync::{atomic, Mutex};
-use io::{mod, IoResult, IoError};
-use prelude::*;
+use prelude::v1::*;
 
-use sys::{mod, timer, retry, c, set_nonblocking, wouldblock};
+use ffi::CString;
+use libc;
+use mem;
+use sync::{Arc, Mutex};
+use sync::atomic::{AtomicBool, Ordering};
+use io::{self, IoResult, IoError};
+
+use sys::{self, timer, retry, c, set_nonblocking, wouldblock};
 use sys::fs::{fd_t, FileDesc};
 use sys_common::net::*;
+use sys_common::net::SocketStatus::*;
 use sys_common::{eof, mkerr_libc};
 
 fn unix_socket(ty: libc::c_int) -> IoResult<fd_t> {
@@ -46,7 +48,7 @@ fn addr_to_sockaddr_un(addr: &CString,
     }
     s.sun_family = libc::AF_UNIX as libc::sa_family_t;
     for (slot, value) in s.sun_path.iter_mut().zip(addr.iter()) {
-        *slot = value;
+        *slot = *value;
     }
 
     // count the null terminator
@@ -141,7 +143,7 @@ impl UnixStream {
     fn lock_nonblocking<'a>(&'a self) -> Guard<'a> {
         let ret = Guard {
             fd: self.fd(),
-            guard: unsafe { self.inner.lock.lock() },
+            guard: unsafe { self.inner.lock.lock().unwrap() },
         };
         assert!(set_nonblocking(self.fd(), true).is_ok());
         ret
@@ -149,8 +151,8 @@ impl UnixStream {
 
     pub fn read(&mut self, buf: &mut [u8]) -> IoResult<uint> {
         let fd = self.fd();
-        let dolock = || self.lock_nonblocking();
-        let doread = |nb| unsafe {
+        let dolock = |&:| self.lock_nonblocking();
+        let doread = |&mut: nb| unsafe {
             let flags = if nb {c::MSG_DONTWAIT} else {0};
             libc::recv(fd,
                        buf.as_mut_ptr() as *mut libc::c_void,
@@ -162,8 +164,8 @@ impl UnixStream {
 
     pub fn write(&mut self, buf: &[u8]) -> IoResult<()> {
         let fd = self.fd();
-        let dolock = || self.lock_nonblocking();
-        let dowrite = |nb: bool, buf: *const u8, len: uint| unsafe {
+        let dolock = |&: | self.lock_nonblocking();
+        let dowrite = |&: nb: bool, buf: *const u8, len: uint| unsafe {
             let flags = if nb {c::MSG_DONTWAIT} else {0};
             libc::send(fd,
                        buf as *const _,
@@ -214,6 +216,10 @@ pub struct UnixListener {
     path: CString,
 }
 
+// we currently own the CString, so these impls should be safe
+unsafe impl Send for UnixListener {}
+unsafe impl Sync for UnixListener {}
+
 impl UnixListener {
     pub fn bind(addr: &CString) -> IoResult<UnixListener> {
         bind(addr, libc::SOCK_STREAM).map(|fd| {
@@ -237,7 +243,7 @@ impl UnixListener {
                         listener: self,
                         reader: reader,
                         writer: writer,
-                        closed: atomic::AtomicBool::new(false),
+                        closed: AtomicBool::new(false),
                     }),
                     deadline: 0,
                 })
@@ -255,7 +261,7 @@ struct AcceptorInner {
     listener: UnixListener,
     reader: FileDesc,
     writer: FileDesc,
-    closed: atomic::AtomicBool,
+    closed: AtomicBool,
 }
 
 impl UnixAcceptor {
@@ -264,7 +270,7 @@ impl UnixAcceptor {
     pub fn accept(&mut self) -> IoResult<UnixStream> {
         let deadline = if self.deadline == 0 {None} else {Some(self.deadline)};
 
-        while !self.inner.closed.load(atomic::SeqCst) {
+        while !self.inner.closed.load(Ordering::SeqCst) {
             unsafe {
                 let mut storage: libc::sockaddr_storage = mem::zeroed();
                 let storagep = &mut storage as *mut libc::sockaddr_storage;
@@ -292,7 +298,7 @@ impl UnixAcceptor {
     }
 
     pub fn close_accept(&mut self) -> IoResult<()> {
-        self.inner.closed.store(true, atomic::SeqCst);
+        self.inner.closed.store(true, Ordering::SeqCst);
         let fd = FileDesc::new(self.inner.writer.fd(), false);
         match fd.write(&[0]) {
             Ok(..) => Ok(()),

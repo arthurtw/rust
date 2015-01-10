@@ -12,18 +12,18 @@ use regex::Regex;
 use std::ascii::AsciiExt;
 use std::cmp;
 
-#[deriving(Show, Clone)]
+#[derive(Show, Clone)]
 pub struct LogDirective {
     pub name: Option<String>,
     pub level: u32,
 }
 
-pub static LOG_LEVEL_NAMES: [&'static str, ..4] = ["ERROR", "WARN", "INFO",
+pub static LOG_LEVEL_NAMES: [&'static str; 4] = ["ERROR", "WARN", "INFO",
                                                "DEBUG"];
 
 /// Parse an individual log level that is either a number or a symbolic log level
 fn parse_log_level(level: &str) -> Option<u32> {
-    from_str::<u32>(level).or_else(|| {
+    level.parse::<u32>().or_else(|| {
         let pos = LOG_LEVEL_NAMES.iter().position(|&name| name.eq_ignore_ascii_case(level));
         pos.map(|p| p as u32 + 1)
     }).map(|p| cmp::min(p, ::MAX_LOG_LEVEL))
@@ -84,7 +84,7 @@ pub fn parse_logging_spec(spec: &str) -> (Vec<LogDirective>, Option<Regex>) {
         match Regex::new(filter) {
             Ok(re) => Some(re),
             Err(e) => {
-                println!("warning: invalid regex filter - {}", e);
+                println!("warning: invalid regex filter - {:?}", e);
                 None
             }
         }

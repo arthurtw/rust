@@ -10,7 +10,7 @@
 
 use super::link;
 use super::write;
-use rustc::session::{mod, config};
+use rustc::session::{self, config};
 use llvm;
 use llvm::archive_ro::ArchiveRO;
 use llvm::{ModuleRef, TargetMachineRef, True, False};
@@ -20,6 +20,7 @@ use rustc::util::common::time;
 use libc;
 use flate;
 
+use std::ffi::CString;
 use std::iter;
 use std::mem;
 use std::num::Int;
@@ -52,82 +53,78 @@ pub fn run(sess: &session::Session, llmod: ModuleRef,
         let path = match path {
             Some(p) => p,
             None => {
-                sess.fatal(format!("could not find rlib for: `{}`",
-                                   name).as_slice());
+                sess.fatal(&format!("could not find rlib for: `{}`",
+                                   name)[]);
             }
         };
 
         let archive = ArchiveRO::open(&path).expect("wanted an rlib");
         let file = path.filename_str().unwrap();
-        let file = file.slice(3, file.len() - 5); // chop off lib/.rlib
+        let file = &file[3..(file.len() - 5)]; // chop off lib/.rlib
         debug!("reading {}", file);
         for i in iter::count(0u, 1) {
             let bc_encoded = time(sess.time_passes(),
                                   format!("check for {}.{}.bytecode.deflate", name, i).as_slice(),
                                   (),
                                   |_| {
-                                      archive.read(format!("{}.{}.bytecode.deflate",
-                                                           file, i).as_slice())
+                                      archive.read(&format!("{}.{}.bytecode.deflate",
+                                                           file, i)[])
                                   });
             let bc_encoded = match bc_encoded {
                 Some(data) => data,
                 None => {
                     if i == 0 {
                         // No bitcode was found at all.
-                        sess.fatal(format!("missing compressed bytecode in {}",
-                                           path.display()).as_slice());
+                        sess.fatal(&format!("missing compressed bytecode in {}",
+                                           path.display())[]);
                     }
                     // No more bitcode files to read.
                     break;
                 },
             };
-            let bc_extractor = if is_versioned_bytecode_format(bc_encoded) {
-                |_| {
+
+            let bc_decoded = if is_versioned_bytecode_format(bc_encoded) {
+                time(sess.time_passes(), format!("decode {}.{}.bc", file, i).as_slice(), (), |_| {
                     // Read the version
                     let version = extract_bytecode_format_version(bc_encoded);
 
                     if version == 1 {
                         // The only version existing so far
                         let data_size = extract_compressed_bytecode_size_v1(bc_encoded);
-                        let compressed_data = bc_encoded[
+                        let compressed_data = &bc_encoded[
                             link::RLIB_BYTECODE_OBJECT_V1_DATA_OFFSET..
-                            link::RLIB_BYTECODE_OBJECT_V1_DATA_OFFSET + data_size as uint];
+                            (link::RLIB_BYTECODE_OBJECT_V1_DATA_OFFSET + data_size as uint)];
 
                         match flate::inflate_bytes(compressed_data) {
                             Some(inflated) => inflated,
                             None => {
-                                sess.fatal(format!("failed to decompress bc of `{}`",
-                                                   name).as_slice())
+                                sess.fatal(&format!("failed to decompress bc of `{}`",
+                                                   name)[])
                             }
                         }
                     } else {
-                        sess.fatal(format!("Unsupported bytecode format version {}",
-                                           version).as_slice())
+                        sess.fatal(&format!("Unsupported bytecode format version {}",
+                                           version)[])
                     }
-                }
+                })
             } else {
+                time(sess.time_passes(), format!("decode {}.{}.bc", file, i).as_slice(), (), |_| {
                 // the object must be in the old, pre-versioning format, so simply
                 // inflate everything and let LLVM decide if it can make sense of it
-                |_| {
                     match flate::inflate_bytes(bc_encoded) {
                         Some(bc) => bc,
                         None => {
-                            sess.fatal(format!("failed to decompress bc of `{}`",
-                                               name).as_slice())
+                            sess.fatal(&format!("failed to decompress bc of `{}`",
+                                               name)[])
                         }
                     }
-                }
+                })
             };
-
-            let bc_decoded = time(sess.time_passes(),
-                                  format!("decode {}.{}.bc", file, i).as_slice(),
-                                  (),
-                                  bc_extractor);
 
             let ptr = bc_decoded.as_slice().as_ptr();
             debug!("linking {}, part {}", name, i);
             time(sess.time_passes(),
-                 format!("ll link {}.{}", name, i).as_slice(),
+                 &format!("ll link {}.{}", name, i)[],
                  (),
                  |()| unsafe {
                 if !llvm::LLVMRustLinkInExternalBitcode(llmod,
@@ -135,16 +132,17 @@ pub fn run(sess: &session::Session, llmod: ModuleRef,
                                                         bc_decoded.len() as libc::size_t) {
                     write::llvm_err(sess.diagnostic().handler(),
                                     format!("failed to load bc of `{}`",
-                                            name.as_slice()));
+                                            &name[]));
                 }
             });
         }
     }
 
     // Internalize everything but the reachable symbols of the current module
-    let cstrs: Vec<::std::c_str::CString> =
-        reachable.iter().map(|s| s.to_c_str()).collect();
-    let arr: Vec<*const i8> = cstrs.iter().map(|c| c.as_ptr()).collect();
+    let cstrs: Vec<CString> = reachable.iter().map(|s| {
+        CString::from_slice(s.as_bytes())
+    }).collect();
+    let arr: Vec<*const libc::c_char> = cstrs.iter().map(|c| c.as_ptr()).collect();
     let ptr = arr.as_ptr();
     unsafe {
         llvm::LLVMRustRunRestrictionPass(llmod,
@@ -167,7 +165,7 @@ pub fn run(sess: &session::Session, llmod: ModuleRef,
     unsafe {
         let pm = llvm::LLVMCreatePassManager();
         llvm::LLVMRustAddAnalysisPasses(tm, pm, llmod);
-        "verify".with_c_str(|s| llvm::LLVMRustAddPass(pm, s));
+        llvm::LLVMRustAddPass(pm, "verify\0".as_ptr() as *const _);
 
         let builder = llvm::LLVMPassManagerBuilderCreate();
         llvm::LLVMPassManagerBuilderPopulateLTOPassManager(builder, pm,
@@ -175,7 +173,7 @@ pub fn run(sess: &session::Session, llmod: ModuleRef,
             /* RunInliner = */ True);
         llvm::LLVMPassManagerBuilderDispose(builder);
 
-        "verify".with_c_str(|s| llvm::LLVMRustAddPass(pm, s));
+        llvm::LLVMRustAddPass(pm, "verify\0".as_ptr() as *const _);
 
         time(sess.time_passes(), "LTO passes", (), |()|
              llvm::LLVMRunPassManager(pm, llmod));
@@ -188,7 +186,7 @@ pub fn run(sess: &session::Session, llmod: ModuleRef,
 fn is_versioned_bytecode_format(bc: &[u8]) -> bool {
     let magic_id_byte_count = link::RLIB_BYTECODE_OBJECT_MAGIC.len();
     return bc.len() > magic_id_byte_count &&
-           bc[..magic_id_byte_count] == link::RLIB_BYTECODE_OBJECT_MAGIC;
+           &bc[0..magic_id_byte_count] == link::RLIB_BYTECODE_OBJECT_MAGIC;
 }
 
 fn extract_bytecode_format_version(bc: &[u8]) -> u32 {
@@ -200,8 +198,7 @@ fn extract_compressed_bytecode_size_v1(bc: &[u8]) -> u64 {
 }
 
 fn read_from_le_bytes<T: Int>(bytes: &[u8], position_in_bytes: uint) -> T {
-    let byte_data = bytes[position_in_bytes..
-                          position_in_bytes + mem::size_of::<T>()];
+    let byte_data = &bytes[position_in_bytes..(position_in_bytes + mem::size_of::<T>())];
     let data = unsafe {
         *(byte_data.as_ptr() as *const T)
     };

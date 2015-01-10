@@ -14,9 +14,11 @@ pub use self::Param::*;
 use self::States::*;
 use self::FormatState::*;
 use self::FormatOp::*;
+use std::ascii::OwnedAsciiExt;
 use std::mem::replace;
+use std::iter::repeat;
 
-#[deriving(PartialEq)]
+#[derive(Copy, PartialEq)]
 enum States {
     Nothing,
     Percent,
@@ -33,20 +35,16 @@ enum States {
     SeekIfEndPercent(int)
 }
 
-impl Copy for States {}
-
-#[deriving(PartialEq)]
+#[derive(Copy, PartialEq)]
 enum FormatState {
     FormatStateFlags,
     FormatStateWidth,
     FormatStatePrecision
 }
 
-impl Copy for FormatState {}
-
 /// Types of parameters a capability can use
 #[allow(missing_docs)]
-#[deriving(Clone)]
+#[derive(Clone)]
 pub enum Param {
     Words(String),
     Number(int)
@@ -55,9 +53,9 @@ pub enum Param {
 /// Container for static and dynamic variable arrays
 pub struct Variables {
     /// Static variables A-Z
-    sta: [Param, ..26],
+    sta: [Param; 26],
     /// Dynamic variables a-z
-    dyn: [Param, ..26]
+    dyn: [Param; 26]
 }
 
 impl Variables {
@@ -292,7 +290,7 @@ pub fn expand(cap: &[u8], params: &[Param], vars: &mut Variables)
                     ';' => (),
 
                     _ => {
-                        return Err(format!("unrecognized format option {}", cur))
+                        return Err(format!("unrecognized format option {:?}", cur))
                     }
                 }
             },
@@ -446,7 +444,7 @@ pub fn expand(cap: &[u8], params: &[Param], vars: &mut Variables)
     Ok(output)
 }
 
-#[deriving(PartialEq)]
+#[derive(Copy, PartialEq)]
 struct Flags {
     width: uint,
     precision: uint,
@@ -456,8 +454,6 @@ struct Flags {
     space: bool
 }
 
-impl Copy for Flags {}
-
 impl Flags {
     fn new() -> Flags {
         Flags{ width: 0, precision: 0, alternate: false,
@@ -465,6 +461,7 @@ impl Flags {
     }
 }
 
+#[derive(Copy)]
 enum FormatOp {
     FormatDigit,
     FormatOctal,
@@ -472,8 +469,6 @@ enum FormatOp {
     FormatHEX,
     FormatString
 }
-
-impl Copy for FormatOp {}
 
 impl FormatOp {
     fn from_char(c: char) -> FormatOp {
@@ -514,7 +509,7 @@ fn format(val: Param, op: FormatOp, flags: Flags) -> Result<Vec<u8> ,String> {
             if flags.precision > s.len() {
                 let mut s_ = Vec::with_capacity(flags.precision);
                 let n = flags.precision - s.len();
-                s_.grow(n, b'0');
+                s_.extend(repeat(b'0').take(n));
                 s_.extend(s.into_iter());
                 s = s_;
             }
@@ -537,10 +532,7 @@ fn format(val: Param, op: FormatOp, flags: Flags) -> Result<Vec<u8> ,String> {
                     }
                 }
                 FormatHEX => {
-                    s = s.to_ascii()
-                         .iter()
-                         .map(|b| b.to_uppercase().as_byte())
-                         .collect();
+                    s = s.into_ascii_uppercase();
                     if flags.alternate {
                         let s_ = replace(&mut s, vec!(b'0', b'X'));
                         s.extend(s_.into_iter());
@@ -560,7 +552,7 @@ fn format(val: Param, op: FormatOp, flags: Flags) -> Result<Vec<u8> ,String> {
                     s
                 }
                 _ => {
-                    return Err(format!("non-string on stack with %{}",
+                    return Err(format!("non-string on stack with %{:?}",
                                        op.to_char()))
                 }
             }
@@ -569,10 +561,10 @@ fn format(val: Param, op: FormatOp, flags: Flags) -> Result<Vec<u8> ,String> {
     if flags.width > s.len() {
         let n = flags.width - s.len();
         if flags.left {
-            s.grow(n, b' ');
+            s.extend(repeat(b' ').take(n));
         } else {
             let mut s_ = Vec::with_capacity(flags.width);
-            s_.grow(n, b' ');
+            s_.extend(repeat(b' ').take(n));
             s_.extend(s.into_iter());
             s = s_;
         }
@@ -644,7 +636,7 @@ mod test {
                     "Binop {} succeeded incorrectly with 1 stack entry", cap);
             let res = get_res("%{1}%{2}", cap, &[], vars);
             assert!(res.is_ok(),
-                    "Binop {} failed with 2 stack entries: {}", cap, res.unwrap_err());
+                    "Binop {} failed with 2 stack entries: {:?}", cap, res.unwrap_err());
         }
     }
 

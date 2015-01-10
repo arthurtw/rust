@@ -17,7 +17,7 @@
 //! internally. The `IndependentSample` trait is for generating values
 //! that do not need to record state.
 
-#![experimental]
+#![unstable]
 
 use core::prelude::*;
 use core::num::{Float, Int};
@@ -96,7 +96,7 @@ pub struct Weighted<T> {
 ///                      Weighted { weight: 4, item: 'b' },
 ///                      Weighted { weight: 1, item: 'c' });
 /// let wc = WeightedChoice::new(items.as_mut_slice());
-/// let mut rng = rand::task_rng();
+/// let mut rng = rand::thread_rng();
 /// for _ in range(0u, 16) {
 ///      // on average prints 'a' 4 times, 'b' 8 and 'c' twice.
 ///      println!("{}", wc.ind_sample(&mut rng));
@@ -114,7 +114,7 @@ impl<'a, T: Clone> WeightedChoice<'a, T> {
     /// - `v` is empty
     /// - the total weight is 0
     /// - the total weight is larger than a `uint` can contain.
-    pub fn new<'a>(items: &'a mut [Weighted<T>]) -> WeightedChoice<'a, T> {
+    pub fn new(items: &'a mut [Weighted<T>]) -> WeightedChoice<'a, T> {
         // strictly speaking, this is subsumed by the total weight == 0 case
         assert!(!items.is_empty(), "WeightedChoice::new called with no items");
 
@@ -208,14 +208,14 @@ mod ziggurat_tables;
 // the perf improvement (25-50%) is definitely worth the extra code
 // size from force-inlining.
 #[inline(always)]
-fn ziggurat<R:Rng>(
+fn ziggurat<R: Rng, P, Z>(
             rng: &mut R,
             symmetric: bool,
             x_tab: ziggurat_tables::ZigTable,
             f_tab: ziggurat_tables::ZigTable,
-            pdf: |f64|: 'static -> f64,
-            zero_case: |&mut R, f64|: 'static -> f64)
-            -> f64 {
+            mut pdf: P,
+            mut zero_case: Z)
+            -> f64 where P: FnMut(f64) -> f64, Z: FnMut(&mut R, f64) -> f64 {
     static SCALE: f64 = (1u64 << 53) as f64;
     loop {
         // reimplement the f64 generation as an optimisation suggested
@@ -258,12 +258,12 @@ fn ziggurat<R:Rng>(
 
 #[cfg(test)]
 mod tests {
-    use std::prelude::*;
+    use std::prelude::v1::*;
 
     use {Rng, Rand};
     use super::{RandSample, WeightedChoice, Weighted, Sample, IndependentSample};
 
-    #[deriving(PartialEq, Show)]
+    #[derive(PartialEq, Show)]
     struct ConstRand(uint);
     impl Rand for ConstRand {
         fn rand<R: Rng>(_: &mut R) -> ConstRand {
@@ -297,7 +297,7 @@ mod tests {
         // it doesn't do weird things to the RNG (so 0 maps to 0, 1 to
         // 1, internally; modulo a modulo operation).
 
-        macro_rules! t (
+        macro_rules! t {
             ($items:expr, $expected:expr) => {{
                 let mut items = $items;
                 let wc = WeightedChoice::new(items.as_mut_slice());
@@ -309,7 +309,7 @@ mod tests {
                     assert_eq!(wc.ind_sample(&mut rng), val)
                 }
             }}
-        );
+        }
 
         t!(vec!(Weighted { weight: 1, item: 10i}), [10]);
 

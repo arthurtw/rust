@@ -36,18 +36,16 @@ use util::nodemap::NodeSet;
 use syntax::ast;
 use syntax::print::pprust;
 use syntax::visit::Visitor;
-use syntax::codemap::{DUMMY_SP, Span};
+use syntax::codemap::Span;
 use syntax::visit;
 
-#[deriving(Eq, PartialEq)]
+#[derive(Copy, Eq, PartialEq)]
 enum Mode {
     InConstant,
     InStatic,
     InStaticMut,
     InNothing,
 }
-
-impl Copy for Mode {}
 
 struct CheckStaticVisitor<'a, 'tcx: 'a> {
     tcx: &'a ty::ctxt<'tcx>,
@@ -56,7 +54,7 @@ struct CheckStaticVisitor<'a, 'tcx: 'a> {
 }
 
 struct GlobalVisitor<'a,'b,'tcx:'a+'b>(
-    euv::ExprUseVisitor<'a,'b,'tcx,ty::ctxt<'tcx>>);
+    euv::ExprUseVisitor<'a,'b,'tcx,ty::ParameterEnvironment<'b,'tcx>>);
 struct GlobalChecker {
     static_consumptions: NodeSet,
     const_borrows: NodeSet,
@@ -72,8 +70,8 @@ pub fn check_crate(tcx: &ty::ctxt) {
         static_local_borrows: NodeSet::new(),
     };
     {
-        let param_env = ty::empty_parameter_environment();
-        let visitor = euv::ExprUseVisitor::new(&mut checker, tcx, param_env);
+        let param_env = ty::empty_parameter_environment(tcx);
+        let visitor = euv::ExprUseVisitor::new(&mut checker, &param_env);
         visit::walk_crate(&mut GlobalVisitor(visitor), tcx.map.krate());
     }
     visit::walk_crate(&mut CheckStaticVisitor {
@@ -84,7 +82,9 @@ pub fn check_crate(tcx: &ty::ctxt) {
 }
 
 impl<'a, 'tcx> CheckStaticVisitor<'a, 'tcx> {
-    fn with_mode(&mut self, mode: Mode, f: |&mut CheckStaticVisitor<'a, 'tcx>|) {
+    fn with_mode<F>(&mut self, mode: Mode, f: F) where
+        F: FnOnce(&mut CheckStaticVisitor<'a, 'tcx>),
+    {
         let old = self.mode;
         self.mode = mode;
         f(self);
@@ -111,23 +111,22 @@ impl<'a, 'tcx> CheckStaticVisitor<'a, 'tcx> {
             return
         };
 
-        self.tcx.sess.span_err(e.span, format!("mutable statics are not allowed \
-                                                to have {}", suffix).as_slice());
+        self.tcx.sess.span_err(e.span, &format!("mutable statics are not allowed \
+                                                to have {}", suffix)[]);
     }
 
     fn check_static_type(&self, e: &ast::Expr) {
         let ty = ty::node_id_to_type(self.tcx, e.id);
         let infcx = infer::new_infer_ctxt(self.tcx);
         let mut fulfill_cx = traits::FulfillmentContext::new();
-        let cause = traits::ObligationCause::misc(DUMMY_SP);
-        let obligation = traits::obligation_for_builtin_bound(self.tcx, cause, ty,
-                                                              ty::BoundSync);
-        fulfill_cx.register_obligation(self.tcx, obligation.unwrap());
-        let env = ty::empty_parameter_environment();
-        let result = fulfill_cx.select_all_or_error(&infcx, &env, self.tcx).is_ok();
-        if !result {
-            self.tcx.sess.span_err(e.span, "shared static items must have a \
-                                            type which implements Sync");
+        let cause = traits::ObligationCause::new(e.span, e.id, traits::SharedStatic);
+        fulfill_cx.register_builtin_bound(&infcx, ty, ty::BoundSync, cause);
+        let env = ty::empty_parameter_environment(self.tcx);
+        match fulfill_cx.select_all_or_error(&infcx, &env) {
+            Ok(()) => { },
+            Err(ref errors) => {
+                traits::report_fulfillment_errors(&infcx, errors);
+            }
         }
     }
 }
@@ -170,8 +169,8 @@ impl<'a, 'tcx, 'v> Visitor<'v> for CheckStaticVisitor<'a, 'tcx> {
             ty::ty_struct(did, _) |
             ty::ty_enum(did, _) if ty::has_dtor(self.tcx, did) => {
                 self.tcx.sess.span_err(e.span,
-                                       format!("{} are not allowed to have \
-                                                destructors", self.msg()).as_slice())
+                                       &format!("{} are not allowed to have \
+                                                destructors", self.msg())[])
             }
             _ => {}
         }
@@ -235,7 +234,7 @@ impl<'a, 'tcx, 'v> Visitor<'v> for CheckStaticVisitor<'a, 'tcx> {
                         let msg = "constants cannot refer to other statics, \
                                    insert an intermediate constant \
                                    instead";
-                        self.tcx.sess.span_err(e.span, msg.as_slice());
+                        self.tcx.sess.span_err(e.span, &msg[]);
                     }
                     _ => {}
                 }

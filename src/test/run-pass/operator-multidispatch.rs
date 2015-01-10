@@ -13,20 +13,24 @@
 
 use std::ops;
 
-#[deriving(Show,PartialEq,Eq)]
+#[derive(Show,PartialEq,Eq)]
 struct Point {
     x: int,
     y: int
 }
 
-impl ops::Add<Point,Point> for Point {
-    fn add(&self, other: &Point) -> Point {
-        Point {x: self.x + (*other).x, y: self.y + (*other).y}
+impl ops::Add for Point {
+    type Output = Point;
+
+    fn add(self, other: Point) -> Point {
+        Point {x: self.x + other.x, y: self.y + other.y}
     }
 }
 
-impl ops::Add<int,Point> for Point {
-    fn add(&self, &other: &int) -> Point {
+impl ops::Add<int> for Point {
+    type Output = Point;
+
+    fn add(self, other: int) -> Point {
         Point {x: self.x + other,
                y: self.y + other}
     }

@@ -11,25 +11,24 @@
 //! Blocking Windows-based file I/O
 
 use alloc::arc::Arc;
-use libc::{mod, c_int};
+use libc::{self, c_int};
 
-use c_str::CString;
 use mem;
-use os::windoze::fill_utf16_buf_and_decode;
+use sys::os::fill_utf16_buf_and_decode;
 use path;
 use ptr;
 use str;
 use io;
 
-use prelude::*;
+use prelude::v1::*;
 use sys;
+use sys::os;
 use sys_common::{keep_going, eof, mkerr_libc};
 
 use io::{FilePermission, Write, UnstableFileStat, Open, FileAccess, FileMode};
-use io::{IoResult, IoError, FileStat, SeekStyle, Seek, Writer, Reader};
+use io::{IoResult, IoError, FileStat, SeekStyle};
 use io::{Read, Truncate, SeekCur, SeekSet, ReadWrite, SeekEnd, Append};
 
-pub use path::WindowsPath as Path;
 pub type fd_t = libc::c_int;
 
 pub struct FileDesc {
@@ -263,15 +262,15 @@ pub fn readdir(p: &Path) -> IoResult<Vec<Path>> {
             let mut more_files = 1 as libc::BOOL;
             while more_files != 0 {
                 {
-                    let filename = str::truncate_utf16_at_nul(&wfd.cFileName);
+                    let filename = os::truncate_utf16_at_nul(&wfd.cFileName);
                     match String::from_utf16(filename) {
-                        Some(filename) => paths.push(Path::new(filename)),
-                        None => {
+                        Ok(filename) => paths.push(Path::new(filename)),
+                        Err(..) => {
                             assert!(libc::FindClose(find_handle) != 0);
                             return Err(IoError {
                                 kind: io::InvalidInput,
                                 desc: "path was not valid UTF-16",
-                                detail: Some(format!("path was not valid UTF-16: {}", filename)),
+                                detail: Some(format!("path was not valid UTF-16: {:?}", filename)),
                             })
                         }, // FIXME #12056: Convert the UCS-2 to invalid utf-8 instead of erroring
                     }

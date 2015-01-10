@@ -9,20 +9,25 @@
 // except according to those terms.
 
 #![crate_type = "bin"]
-#![feature(phase, slicing_syntax, globs)]
+#![allow(unknown_features)]
+#![feature(slicing_syntax, unboxed_closures)]
+#![feature(box_syntax)]
+#![feature(int_uint)]
 
 #![deny(warnings)]
 
 extern crate test;
 extern crate getopts;
-#[phase(plugin, link)] extern crate log;
 
+#[macro_use]
+extern crate log;
 extern crate regex;
 
 use std::os;
 use std::io;
 use std::io::fs;
 use std::str::FromStr;
+use std::thunk::Thunk;
 use getopts::{optopt, optflag, reqopt};
 use common::Config;
 use common::{Pretty, DebugInfoGdb, DebugInfoLldb, Codegen};
@@ -100,7 +105,7 @@ pub fn parse_config(args: Vec<String> ) -> Config {
     let matches =
         &match getopts::getopts(args_.as_slice(), groups.as_slice()) {
           Ok(m) => m,
-          Err(f) => panic!("{}", f)
+          Err(f) => panic!("{:?}", f)
         };
 
     if matches.opt_present("h") || matches.opt_present("help") {
@@ -119,7 +124,7 @@ pub fn parse_config(args: Vec<String> ) -> Config {
         match regex::Regex::new(s) {
             Ok(re) => Some(re),
             Err(e) => {
-                println!("failed to parse filter /{}/: {}", s, e);
+                println!("failed to parse filter /{}/: {:?}", s, e);
                 panic!()
             }
         }
@@ -151,7 +156,7 @@ pub fn parse_config(args: Vec<String> ) -> Config {
             matches.opt_str("ratchet-metrics").map(|s| Path::new(s)),
         ratchet_noise_percent:
             matches.opt_str("ratchet-noise-percent")
-                   .and_then(|s| from_str::<f64>(s.as_slice())),
+                   .and_then(|s| s.as_slice().parse::<f64>()),
         runtool: matches.opt_str("runtool"),
         host_rustcflags: matches.opt_str("host-rustcflags"),
         target_rustcflags: matches.opt_str("target-rustcflags"),
@@ -178,20 +183,18 @@ pub fn parse_config(args: Vec<String> ) -> Config {
 pub fn log_config(config: &Config) {
     let c = config;
     logv(c, format!("configuration:"));
-    logv(c, format!("compile_lib_path: {}", config.compile_lib_path));
-    logv(c, format!("run_lib_path: {}", config.run_lib_path));
-    logv(c, format!("rustc_path: {}", config.rustc_path.display()));
-    logv(c, format!("src_base: {}", config.src_base.display()));
-    logv(c, format!("build_base: {}", config.build_base.display()));
+    logv(c, format!("compile_lib_path: {:?}", config.compile_lib_path));
+    logv(c, format!("run_lib_path: {:?}", config.run_lib_path));
+    logv(c, format!("rustc_path: {:?}", config.rustc_path.display()));
+    logv(c, format!("src_base: {:?}", config.src_base.display()));
+    logv(c, format!("build_base: {:?}", config.build_base.display()));
     logv(c, format!("stage_id: {}", config.stage_id));
     logv(c, format!("mode: {}", config.mode));
     logv(c, format!("run_ignored: {}", config.run_ignored));
     logv(c, format!("filter: {}",
                     opt_str(&config.filter
                                    .as_ref()
-                                   .map(|re| {
-                                       re.to_string().into_string()
-                                   }))));
+                                   .map(|re| re.to_string()))));
     logv(c, format!("runtool: {}", opt_str(&config.runtool)));
     logv(c, format!("host-rustcflags: {}",
                     opt_str(&config.host_rustcflags)));
@@ -200,10 +203,10 @@ pub fn log_config(config: &Config) {
     logv(c, format!("jit: {}", config.jit));
     logv(c, format!("target: {}", config.target));
     logv(c, format!("host: {}", config.host));
-    logv(c, format!("android-cross-path: {}",
+    logv(c, format!("android-cross-path: {:?}",
                     config.android_cross_path.display()));
-    logv(c, format!("adb_path: {}", config.adb_path));
-    logv(c, format!("adb_test_dir: {}", config.adb_test_dir));
+    logv(c, format!("adb_path: {:?}", config.adb_path));
+    logv(c, format!("adb_test_dir: {:?}", config.adb_test_dir));
     logv(c, format!("adb_device_status: {}",
                     config.adb_device_status));
     match config.test_shard {
@@ -265,7 +268,7 @@ pub fn run_tests(config: &Config) {
         Ok(true) => {}
         Ok(false) => panic!("Some tests failed"),
         Err(e) => {
-            println!("I/O failure during tests: {}", e);
+            println!("I/O failure during tests: {:?}", e);
         }
     }
 }
@@ -293,13 +296,13 @@ pub fn test_opts(config: &Config) -> test::TestOpts {
 }
 
 pub fn make_tests(config: &Config) -> Vec<test::TestDescAndFn> {
-    debug!("making tests from {}",
+    debug!("making tests from {:?}",
            config.src_base.display());
     let mut tests = Vec::new();
     let dirs = fs::readdir(&config.src_base).unwrap();
     for file in dirs.iter() {
         let file = file.clone();
-        debug!("inspecting file {}", file.display());
+        debug!("inspecting file {:?}", file.display());
         if is_test(config, &file) {
             let t = make_test(config, &file, || {
                 match config.mode {
@@ -340,8 +343,9 @@ pub fn is_test(config: &Config, testfile: &Path) -> bool {
     return valid;
 }
 
-pub fn make_test(config: &Config, testfile: &Path, f: || -> test::TestFn)
-                 -> test::TestDescAndFn {
+pub fn make_test<F>(config: &Config, testfile: &Path, f: F) -> test::TestDescAndFn where
+    F: FnOnce() -> test::TestFn,
+{
     test::TestDescAndFn {
         desc: test::TestDesc {
             name: make_test_name(config, testfile),
@@ -369,16 +373,16 @@ pub fn make_test_closure(config: &Config, testfile: &Path) -> test::TestFn {
     let config = (*config).clone();
     // FIXME (#9639): This needs to handle non-utf8 paths
     let testfile = testfile.as_str().unwrap().to_string();
-    test::DynTestFn(proc() {
+    test::DynTestFn(Thunk::new(move || {
         runtest::run(config, testfile)
-    })
+    }))
 }
 
 pub fn make_metrics_test_closure(config: &Config, testfile: &Path) -> test::TestFn {
     let config = (*config).clone();
     // FIXME (#9639): This needs to handle non-utf8 paths
     let testfile = testfile.as_str().unwrap().to_string();
-    test::DynMetricFn(proc(mm) {
+    test::DynMetricFn(box move |: mm: &mut test::MetricMap| {
         runtest::run_metrics(config, testfile, mm)
     })
 }
@@ -393,7 +397,7 @@ fn extract_gdb_version(full_version_line: Option<String>) -> Option<String> {
 
             match re.captures(full_version_line) {
                 Some(captures) => {
-                    Some(captures.at(2).to_string())
+                    Some(captures.at(2).unwrap_or("").to_string())
                 }
                 None => {
                     println!("Could not extract GDB version from line '{}'",
@@ -427,7 +431,7 @@ fn extract_lldb_version(full_version_line: Option<String>) -> Option<String> {
 
             match re.captures(full_version_line) {
                 Some(captures) => {
-                    Some(captures.at(1).to_string())
+                    Some(captures.at(1).unwrap_or("").to_string())
                 }
                 None => {
                     println!("Could not extract LLDB version from line '{}'",

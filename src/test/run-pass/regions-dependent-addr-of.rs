@@ -11,6 +11,8 @@
 // Test lifetimes are linked properly when we create dependent region pointers.
 // Issue #3148.
 
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
 struct A {
     value: B
@@ -18,7 +20,7 @@ struct A {
 
 struct B {
     v1: int,
-    v2: [int, ..3],
+    v2: [int; 3],
     v3: Vec<int> ,
     v4: C,
     v5: Box<C>,

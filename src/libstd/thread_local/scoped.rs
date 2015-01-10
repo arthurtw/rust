@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014-2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -17,14 +17,14 @@
 //!
 //! There are no restrictions on what types can be placed into a scoped
 //! variable, but all scoped variables are initialized to the equivalent of
-//! null. Scoped thread local stor is useful when a value is present for a known
+//! null. Scoped thread local storage is useful when a value is present for a known
 //! period of time and it is not required to relinquish ownership of the
 //! contents.
 //!
 //! # Example
 //!
 //! ```
-//! scoped_thread_local!(static FOO: uint)
+//! scoped_thread_local!(static FOO: uint);
 //!
 //! // Initially each scoped slot is empty.
 //! assert!(!FOO.is_set());
@@ -38,13 +38,17 @@
 //! });
 //! ```
 
-#![macro_escape]
+#![unstable = "scoped TLS has yet to have wide enough use to fully consider \
+               stabilizing its interface"]
 
-use prelude::*;
+use prelude::v1::*;
 
 // macro hygiene sure would be nice, wouldn't it?
-#[doc(hidden)] pub use self::imp::KeyInner;
-#[doc(hidden)] pub use sys_common::thread_local::INIT as OS_INIT;
+#[doc(hidden)]
+pub mod __impl {
+    pub use super::imp::KeyInner;
+    pub use sys_common::thread_local::INIT as OS_INIT;
+}
 
 /// Type representing a thread local storage key corresponding to a reference
 /// to the type parameter `T`.
@@ -53,33 +57,39 @@ use prelude::*;
 /// type `T` scoped to a particular lifetime. Keys provides two methods, `set`
 /// and `with`, both of which currently use closures to control the scope of
 /// their contents.
-pub struct Key<T> { #[doc(hidden)] pub inner: KeyInner<T> }
+pub struct Key<T> { #[doc(hidden)] pub inner: __impl::KeyInner<T> }
 
 /// Declare a new scoped thread local storage key.
 ///
 /// This macro declares a `static` item on which methods are used to get and
 /// set the value stored within.
 #[macro_export]
-macro_rules! scoped_thread_local(
+macro_rules! scoped_thread_local {
     (static $name:ident: $t:ty) => (
-        __scoped_thread_local_inner!(static $name: $t)
+        __scoped_thread_local_inner!(static $name: $t);
     );
     (pub static $name:ident: $t:ty) => (
-        __scoped_thread_local_inner!(pub static $name: $t)
+        __scoped_thread_local_inner!(pub static $name: $t);
     );
-)
+}
 
 #[macro_export]
 #[doc(hidden)]
-macro_rules! __scoped_thread_local_inner(
+macro_rules! __scoped_thread_local_inner {
     (static $name:ident: $t:ty) => (
-        #[cfg_attr(not(any(windows, target_os = "android", target_os = "ios")),
+        #[cfg_attr(not(any(windows,
+                           target_os = "android",
+                           target_os = "ios",
+                           target_arch = "aarch64")),
                    thread_local)]
         static $name: ::std::thread_local::scoped::Key<$t> =
             __scoped_thread_local_inner!($t);
     );
     (pub static $name:ident: $t:ty) => (
-        #[cfg_attr(not(any(windows, target_os = "android", target_os = "ios")),
+        #[cfg_attr(not(any(windows,
+                           target_os = "android",
+                           target_os = "ios",
+                           target_arch = "aarch64")),
                    thread_local)]
         pub static $name: ::std::thread_local::scoped::Key<$t> =
             __scoped_thread_local_inner!($t);
@@ -87,24 +97,24 @@ macro_rules! __scoped_thread_local_inner(
     ($t:ty) => ({
         use std::thread_local::scoped::Key as __Key;
 
-        #[cfg(not(any(windows, target_os = "android", target_os = "ios")))]
-        const INIT: __Key<$t> = __Key {
-            inner: ::std::thread_local::scoped::KeyInner {
+        #[cfg(not(any(windows, target_os = "android", target_os = "ios", target_arch = "aarch64")))]
+        const _INIT: __Key<$t> = __Key {
+            inner: ::std::thread_local::scoped::__impl::KeyInner {
                 inner: ::std::cell::UnsafeCell { value: 0 as *mut _ },
             }
         };
 
-        #[cfg(any(windows, target_os = "android", target_os = "ios"))]
-        const INIT: __Key<$t> = __Key {
-            inner: ::std::thread_local::scoped::KeyInner {
-                inner: ::std::thread_local::scoped::OS_INIT,
-                marker: ::std::kinds::marker::InvariantType,
+        #[cfg(any(windows, target_os = "android", target_os = "ios", target_arch = "aarch64"))]
+        const _INIT: __Key<$t> = __Key {
+            inner: ::std::thread_local::scoped::__impl::KeyInner {
+                inner: ::std::thread_local::scoped::__impl::OS_INIT,
+                marker: ::std::marker::InvariantType,
             }
         };
 
-        INIT
+        _INIT
     })
-)
+}
 
 impl<T> Key<T> {
     /// Insert a value into this scoped thread local storage slot for a
@@ -119,7 +129,7 @@ impl<T> Key<T> {
     /// # Example
     ///
     /// ```
-    /// scoped_thread_local!(static FOO: uint)
+    /// scoped_thread_local!(static FOO: uint);
     ///
     /// FOO.set(&100, || {
     ///     let val = FOO.with(|v| *v);
@@ -135,9 +145,11 @@ impl<T> Key<T> {
     ///     assert_eq!(val, 100);
     /// });
     /// ```
-    pub fn set<R>(&'static self, t: &T, cb: || -> R) -> R {
+    pub fn set<R, F>(&'static self, t: &T, cb: F) -> R where
+        F: FnOnce() -> R,
+    {
         struct Reset<'a, T: 'a> {
-            key: &'a KeyInner<T>,
+            key: &'a __impl::KeyInner<T>,
             val: *mut T,
         }
         #[unsafe_destructor]
@@ -169,13 +181,15 @@ impl<T> Key<T> {
     /// # Example
     ///
     /// ```no_run
-    /// scoped_thread_local!(static FOO: uint)
+    /// scoped_thread_local!(static FOO: uint);
     ///
     /// FOO.with(|slot| {
     ///     // work with `slot`
     /// });
     /// ```
-    pub fn with<R>(&'static self, cb: |&T| -> R) -> R {
+    pub fn with<R, F>(&'static self, cb: F) -> R where
+        F: FnOnce(&T) -> R
+    {
         unsafe {
             let ptr = self.inner.get();
             assert!(!ptr.is_null(), "cannot access a scoped thread local \
@@ -190,13 +204,14 @@ impl<T> Key<T> {
     }
 }
 
-#[cfg(not(any(windows, target_os = "android", target_os = "ios")))]
+#[cfg(not(any(windows, target_os = "android", target_os = "ios", target_arch = "aarch64")))]
 mod imp {
     use std::cell::UnsafeCell;
 
-    // FIXME: Should be a `Cell`, but that's not `Sync`
     #[doc(hidden)]
     pub struct KeyInner<T> { pub inner: UnsafeCell<*mut T> }
+
+    unsafe impl<T> ::marker::Sync for KeyInner<T> { }
 
     #[doc(hidden)]
     impl<T> KeyInner<T> {
@@ -207,9 +222,9 @@ mod imp {
     }
 }
 
-#[cfg(any(windows, target_os = "android", target_os = "ios"))]
+#[cfg(any(windows, target_os = "android", target_os = "ios", target_arch = "aarch64"))]
 mod imp {
-    use kinds::marker;
+    use marker;
     use sys_common::thread_local::StaticKey as OsStaticKey;
 
     #[doc(hidden)]
@@ -217,6 +232,8 @@ mod imp {
         pub inner: OsStaticKey,
         pub marker: marker::InvariantType<T>,
     }
+
+    unsafe impl<T> ::marker::Sync for KeyInner<T> { }
 
     #[doc(hidden)]
     impl<T> KeyInner<T> {
@@ -231,11 +248,13 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use cell::Cell;
-    use prelude::*;
+    use prelude::v1::*;
+
+    scoped_thread_local!(static FOO: uint);
 
     #[test]
     fn smoke() {
-        scoped_thread_local!(static BAR: uint)
+        scoped_thread_local!(static BAR: uint);
 
         assert!(!BAR.is_set());
         BAR.set(&1, || {
@@ -249,7 +268,7 @@ mod tests {
 
     #[test]
     fn cell_allowed() {
-        scoped_thread_local!(static BAR: Cell<uint>)
+        scoped_thread_local!(static BAR: Cell<uint>);
 
         BAR.set(&Cell::new(1), || {
             BAR.with(|slot| {
@@ -257,5 +276,16 @@ mod tests {
             });
         });
     }
-}
 
+    #[test]
+    fn scope_item_allowed() {
+        assert!(!FOO.is_set());
+        FOO.set(&1, || {
+            assert!(FOO.is_set());
+            FOO.with(|slot| {
+                assert_eq!(*slot, 1);
+            });
+        });
+        assert!(!FOO.is_set());
+    }
+}

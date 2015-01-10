@@ -70,6 +70,9 @@
 // lldb-check:[...]$5 = false
 // lldb-command:continue
 
+
+#![omit_gdb_pretty_printer_section]
+
 fn main() {
 
     let x = false;
@@ -77,7 +80,7 @@ fn main() {
     zzz(); // #break
     sentinel();
 
-    let unique_closure: proc(int) = proc(x) {
+    let unique_closure = |: x:int| {
         zzz(); // #break
         sentinel();
 

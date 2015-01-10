@@ -10,16 +10,18 @@
 
 #![allow(non_snake_case)]
 
-register_diagnostic!(E0001, r##"
+register_diagnostic! {
+    E0001,
+r##"
     This error suggests that the expression arm corresponding to the noted pattern
     will never be reached as for all possible values of the expression being matched,
     one of the preceeding patterns will match.
 
     This means that perhaps some of the preceeding patterns are too general, this
     one is too specific or the ordering is incorrect.
-"##)
+"## }
 
-register_diagnostics!(
+register_diagnostics! {
     E0002,
     E0003,
     E0004,
@@ -149,5 +151,12 @@ register_diagnostics!(
     E0171,
     E0172,
     E0173, // manual implementations of unboxed closure traits are experimental
-    E0174 // explicit use of unboxed closure methods are experimental
-)
+    E0174, // explicit use of unboxed closure methods are experimental
+    E0177,
+    E0178,
+    E0180,
+    E0181,
+    E0182,
+    E0183,
+    E0184
+}
